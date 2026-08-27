@@ -109,6 +109,83 @@ describe("D1 payment processing flow", () => {
 		});
 	});
 
+	it("updates paid transaction confirmations without repeating the paid event", async () => {
+		const now = Date.now();
+		await insertOrderWithSnapshot(db, {
+			id: "order-confirmation-refresh",
+			externalOrderId: "merchant-order-confirmation-refresh",
+			status: "pending",
+			target: "TConfirmationRefresh111111111111111111111",
+			expiresAt: now + 900_000,
+			now,
+		});
+		await db.batch([
+			db
+				.prepare(
+					"INSERT INTO api_keys (id, name, pid, secret_encrypted, scopes, created_at, updated_at) VALUES ('api-key-confirmation-refresh', 'Confirmation refresh', 'gm_confirmation_refresh', 'encrypted', '[\"orders:create\"]', ?, ?)",
+				)
+				.bind(now, now),
+			db.prepare(
+				"UPDATE orders SET api_key_id = 'api-key-confirmation-refresh', notify_url = 'https://merchant.example/confirmation-refresh' WHERE id = 'order-confirmation-refresh'",
+			),
+		]);
+		const webhookMessages: unknown[] = [];
+		const notificationEnv = {
+			DB: db,
+			WEBHOOK_QUEUE: {
+				send: async (message: unknown) => {
+					webhookMessages.push(message);
+				},
+			},
+		} as unknown as Env;
+		const initiallyPaid = await recordPaymentTransaction(
+			notificationEnv,
+			"order-confirmation-refresh",
+			transaction({
+				hash: "tx-confirmation-refresh",
+				to: "TConfirmationRefresh111111111111111111111",
+				confirmations: 2,
+			}),
+		);
+		expect(initiallyPaid).toEqual({ duplicate: false, status: "paid" });
+		const before = await db
+			.prepare(
+				"SELECT version, paid_at, updated_at FROM orders WHERE id = 'order-confirmation-refresh'",
+			)
+			.first<{ version: number; paid_at: number; updated_at: number }>();
+
+		await expect(
+			recordPaymentTransaction(
+				notificationEnv,
+				"order-confirmation-refresh",
+				transaction({
+					hash: "tx-confirmation-refresh",
+					to: "TConfirmationRefresh111111111111111111111",
+					confirmations: 3,
+				}),
+			),
+		).resolves.toEqual({ duplicate: false, status: "paid" });
+
+		const after = await db
+			.prepare(
+				"SELECT version, paid_at, updated_at FROM orders WHERE id = 'order-confirmation-refresh'",
+			)
+			.first<{ version: number; paid_at: number; updated_at: number }>();
+		expect(after).toEqual(before);
+		const counts = await db
+			.prepare(`SELECT
+			 (SELECT COUNT(*) FROM webhook_events WHERE order_id = 'order-confirmation-refresh' AND type = 'order.paid') AS paid_events,
+			 (SELECT COUNT(*) FROM webhook_deliveries WHERE order_id = 'order-confirmation-refresh') AS deliveries,
+			 (SELECT confirmations FROM order_payments WHERE order_id = 'order-confirmation-refresh') AS confirmations`)
+			.first<{
+				paid_events: number;
+				deliveries: number;
+				confirmations: number;
+			}>();
+		expect(counts).toEqual({ paid_events: 1, deliveries: 1, confirmations: 3 });
+		expect(webhookMessages).toHaveLength(1);
+	});
+
 	it("does not retry dashboard queries after its single batch fails", async () => {
 		const counters = createDatastoreCounters();
 		const unavailable = new Proxy(db, {
