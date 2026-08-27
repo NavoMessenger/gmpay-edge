@@ -16,6 +16,7 @@ import {
 } from "#/features/orders/server/create";
 import { type ApiOrder, getOrder } from "#/features/orders/server/query";
 import { requestId as getRequestId } from "#/server/http";
+import { quoteWithExchangeRate } from "#/features/payment-settings/server/rates";
 import {
 	RequestBodyTooLargeError,
 	readLimitedRequestText,
@@ -55,6 +56,15 @@ const gmpayCreateSchema = z.object({
 	redirect_url: z.string().trim().pipe(z.url()).optional(),
 	name: z.string().trim().max(500).optional(),
 	payment_type: z.string().trim().max(32).optional(),
+});
+const gmpayOptionsSchema = z.object({
+	pid: z.string().trim().min(1).max(128),
+	amount: orderAmountSchema,
+	currency: z.string().trim().length(3),
+	signature: z
+		.string()
+		.trim()
+		.regex(/^[0-9a-f]{64}$/),
 });
 
 export type GmpayCreateInput = z.infer<typeof gmpayCreateSchema>;
@@ -99,6 +109,69 @@ export async function authenticateGmpayCreate(
 	input: GmpayCreateInput,
 ) {
 	return authenticateGmpayParameters(db, input, "orders:create");
+}
+
+export async function handleGmpayOptionsRequest(
+	request: Request,
+	env: Pick<Env, "DB">,
+) {
+	const requestId = getRequestId(request);
+	try {
+		const parsed = gmpayOptionsSchema.safeParse(
+			Object.fromEntries(new URL(request.url).searchParams),
+		);
+		if (!parsed.success)
+			return gatewayResponse(
+				gmpayError(requestId, 10009, "invalid parameters"),
+				400,
+			);
+		const principal = await authenticateGmpayParameters(
+			env.DB,
+			parsed.data,
+			"orders:create",
+		);
+		if (!principal)
+			return gatewayResponse(
+				gmpayError(requestId, 401, "signature verification failed"),
+				401,
+			);
+		const rows = await env.DB.prepare(
+			`SELECT rm.id AS receiving_method_id, a.code AS token, a.rail_code AS network, pr.name AS network_name, a.decimals FROM receiving_methods rm JOIN receiving_method_assets link ON link.receiving_method_id = rm.id JOIN payment_assets a ON a.id = link.payment_asset_id JOIN payment_rails pr ON pr.code = a.rail_code WHERE rm.enabled = 1 AND rm.target_value != '' AND EXISTS (SELECT 1 FROM payment_ingresses pc WHERE pc.rail_code = a.rail_code AND pc.enabled = 1 AND (pr.kind IN ('exchange','wallet') OR pc.health_status = 'healthy')) ORDER BY rm.sort_order, rm.name`,
+		).all<{
+			receiving_method_id: string;
+			token: string;
+			network: string;
+			network_name: string;
+			decimals: number;
+		}>();
+		const data = [];
+		for (const row of rows.results) {
+			try {
+				const quote = await quoteWithExchangeRate(env.DB, {
+					amount: parsed.data.amount,
+					currency: parsed.data.currency,
+					paymentAsset: row.token,
+					assetDecimals: row.decimals,
+				});
+				if (quote)
+					data.push({
+						receiving_method_id: row.receiving_method_id,
+						token: row.token,
+						network: row.network,
+						network_name: row.network_name,
+						actual_amount: quote.paymentAmount,
+					});
+			} catch {
+				/* exclude unavailable quote */
+			}
+		}
+		return gatewayResponse(
+			{ status_code: 200, message: "success", data, request_id: requestId },
+			200,
+		);
+	} catch {
+		return gatewayResponse(gmpayError(requestId, 500, "system error"), 500);
+	}
 }
 
 export async function authenticateGmpayQuery(

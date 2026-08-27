@@ -79,6 +79,7 @@ import { Route as ApiProvidersAlchemySourceIdRouteImport } from './routes/api/pr
 import { Route as ApiCheckoutOrderIdReviewRouteImport } from './routes/api/checkout/$orderId/review'
 import { Route as AdminPaymentSettingsRatesFiatRouteImport } from './routes/admin/payment-settings/rates/fiat'
 import { Route as PaymentsGmpayV1OrderQueryRouteImport } from './routes/payments/gmpay/v1/order/query'
+import { Route as PaymentsGmpayV1OrderPaymentOptionsRouteImport } from './routes/payments/gmpay/v1/order/payment-options'
 import { Route as PaymentsGmpayV1OrderCreateTransactionRouteImport } from './routes/payments/gmpay/v1/order/create-transaction'
 import { Route as ApiAdminPaymentReviewsReviewIdEvidenceRouteImport } from './routes/api/admin/payment-reviews/$reviewId/evidence'
 import { Route as PaymentsEpayV1OrderCreateTransactionSubmitDotphpRouteImport } from './routes/payments/epay/v1/order/create-transaction/submit[.]php'
@@ -450,6 +451,12 @@ const PaymentsGmpayV1OrderQueryRoute =
     path: '/payments/gmpay/v1/order/query',
     getParentRoute: () => rootRouteImport,
   } as any)
+const PaymentsGmpayV1OrderPaymentOptionsRoute =
+  PaymentsGmpayV1OrderPaymentOptionsRouteImport.update({
+    id: '/payments/gmpay/v1/order/payment-options',
+    path: '/payments/gmpay/v1/order/payment-options',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const PaymentsGmpayV1OrderCreateTransactionRoute =
   PaymentsGmpayV1OrderCreateTransactionRouteImport.update({
     id: '/payments/gmpay/v1/order/create-transaction',
@@ -551,6 +558,7 @@ export interface FileRoutesByFullPath {
   '/admin/payment-settings/rates/': typeof AdminPaymentSettingsRatesIndexRoute
   '/api/admin/payment-reviews/$reviewId/evidence': typeof ApiAdminPaymentReviewsReviewIdEvidenceRoute
   '/payments/gmpay/v1/order/create-transaction': typeof PaymentsGmpayV1OrderCreateTransactionRoute
+  '/payments/gmpay/v1/order/payment-options': typeof PaymentsGmpayV1OrderPaymentOptionsRoute
   '/payments/gmpay/v1/order/query': typeof PaymentsGmpayV1OrderQueryRoute
   '/payments/epay/v1/order/create-transaction/api.php': typeof PaymentsEpayV1OrderCreateTransactionApiDotphpRoute
   '/payments/epay/v1/order/create-transaction/mapi.php': typeof PaymentsEpayV1OrderCreateTransactionMapiDotphpRoute
@@ -617,6 +625,7 @@ export interface FileRoutesByTo {
   '/admin/payment-settings/rates': typeof AdminPaymentSettingsRatesIndexRoute
   '/api/admin/payment-reviews/$reviewId/evidence': typeof ApiAdminPaymentReviewsReviewIdEvidenceRoute
   '/payments/gmpay/v1/order/create-transaction': typeof PaymentsGmpayV1OrderCreateTransactionRoute
+  '/payments/gmpay/v1/order/payment-options': typeof PaymentsGmpayV1OrderPaymentOptionsRoute
   '/payments/gmpay/v1/order/query': typeof PaymentsGmpayV1OrderQueryRoute
   '/payments/epay/v1/order/create-transaction/api.php': typeof PaymentsEpayV1OrderCreateTransactionApiDotphpRoute
   '/payments/epay/v1/order/create-transaction/mapi.php': typeof PaymentsEpayV1OrderCreateTransactionMapiDotphpRoute
@@ -695,6 +704,7 @@ export interface FileRoutesById {
   '/admin/payment-settings/rates/': typeof AdminPaymentSettingsRatesIndexRoute
   '/api/admin/payment-reviews/$reviewId/evidence': typeof ApiAdminPaymentReviewsReviewIdEvidenceRoute
   '/payments/gmpay/v1/order/create-transaction': typeof PaymentsGmpayV1OrderCreateTransactionRoute
+  '/payments/gmpay/v1/order/payment-options': typeof PaymentsGmpayV1OrderPaymentOptionsRoute
   '/payments/gmpay/v1/order/query': typeof PaymentsGmpayV1OrderQueryRoute
   '/payments/epay/v1/order/create-transaction/api.php': typeof PaymentsEpayV1OrderCreateTransactionApiDotphpRoute
   '/payments/epay/v1/order/create-transaction/mapi.php': typeof PaymentsEpayV1OrderCreateTransactionMapiDotphpRoute
@@ -772,6 +782,7 @@ export interface FileRouteTypes {
     | '/admin/payment-settings/rates/'
     | '/api/admin/payment-reviews/$reviewId/evidence'
     | '/payments/gmpay/v1/order/create-transaction'
+    | '/payments/gmpay/v1/order/payment-options'
     | '/payments/gmpay/v1/order/query'
     | '/payments/epay/v1/order/create-transaction/api.php'
     | '/payments/epay/v1/order/create-transaction/mapi.php'
@@ -838,6 +849,7 @@ export interface FileRouteTypes {
     | '/admin/payment-settings/rates'
     | '/api/admin/payment-reviews/$reviewId/evidence'
     | '/payments/gmpay/v1/order/create-transaction'
+    | '/payments/gmpay/v1/order/payment-options'
     | '/payments/gmpay/v1/order/query'
     | '/payments/epay/v1/order/create-transaction/api.php'
     | '/payments/epay/v1/order/create-transaction/mapi.php'
@@ -915,6 +927,7 @@ export interface FileRouteTypes {
     | '/admin/payment-settings/rates/'
     | '/api/admin/payment-reviews/$reviewId/evidence'
     | '/payments/gmpay/v1/order/create-transaction'
+    | '/payments/gmpay/v1/order/payment-options'
     | '/payments/gmpay/v1/order/query'
     | '/payments/epay/v1/order/create-transaction/api.php'
     | '/payments/epay/v1/order/create-transaction/mapi.php'
@@ -941,6 +954,7 @@ export interface RootRouteChildren {
   ApiTelegramBotIdWebhookRoute: typeof ApiTelegramBotIdWebhookRoute
   ApiAdminPaymentReviewsReviewIdEvidenceRoute: typeof ApiAdminPaymentReviewsReviewIdEvidenceRoute
   PaymentsGmpayV1OrderCreateTransactionRoute: typeof PaymentsGmpayV1OrderCreateTransactionRoute
+  PaymentsGmpayV1OrderPaymentOptionsRoute: typeof PaymentsGmpayV1OrderPaymentOptionsRoute
   PaymentsGmpayV1OrderQueryRoute: typeof PaymentsGmpayV1OrderQueryRoute
   PaymentsEpayV1OrderCreateTransactionApiDotphpRoute: typeof PaymentsEpayV1OrderCreateTransactionApiDotphpRoute
   PaymentsEpayV1OrderCreateTransactionMapiDotphpRoute: typeof PaymentsEpayV1OrderCreateTransactionMapiDotphpRoute
@@ -1439,6 +1453,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PaymentsGmpayV1OrderQueryRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/payments/gmpay/v1/order/payment-options': {
+      id: '/payments/gmpay/v1/order/payment-options'
+      path: '/payments/gmpay/v1/order/payment-options'
+      fullPath: '/payments/gmpay/v1/order/payment-options'
+      preLoaderRoute: typeof PaymentsGmpayV1OrderPaymentOptionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/payments/gmpay/v1/order/create-transaction': {
       id: '/payments/gmpay/v1/order/create-transaction'
       path: '/payments/gmpay/v1/order/create-transaction'
@@ -1714,6 +1735,8 @@ const rootRouteChildren: RootRouteChildren = {
     ApiAdminPaymentReviewsReviewIdEvidenceRoute,
   PaymentsGmpayV1OrderCreateTransactionRoute:
     PaymentsGmpayV1OrderCreateTransactionRoute,
+  PaymentsGmpayV1OrderPaymentOptionsRoute:
+    PaymentsGmpayV1OrderPaymentOptionsRoute,
   PaymentsGmpayV1OrderQueryRoute: PaymentsGmpayV1OrderQueryRoute,
   PaymentsEpayV1OrderCreateTransactionApiDotphpRoute:
     PaymentsEpayV1OrderCreateTransactionApiDotphpRoute,
