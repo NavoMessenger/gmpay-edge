@@ -377,7 +377,10 @@ export function logMerchantApiFailure(
 	console.error("merchant_api_failure", { operation, requestId });
 }
 
-function gatewayResponse(body: { request_id: string }, status: number) {
+function gatewayResponse(
+	body: { request_id: string } & Record<string, unknown>,
+	status: number,
+) {
 	return Response.json(body, {
 		status,
 		headers: {

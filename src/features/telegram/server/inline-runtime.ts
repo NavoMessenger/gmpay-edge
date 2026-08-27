@@ -21,14 +21,6 @@ import {
 	type StoredInlineOrder,
 } from "./inline-order-schema";
 import {
-	createTelegramPaymentOrder,
-	getTelegramPaymentDetails,
-	listPaymentAssets,
-	listPaymentNetworks,
-	paymentQrUrl,
-	paymentQrValue,
-} from "./payment";
-import {
 	inlineOptionId,
 	inlinePaymentOptions,
 	parseInlineOptionId,
@@ -180,6 +172,10 @@ async function answerOrderResults(
 				inline_keyboard: [
 					[
 						{
+							text: m.telegram_open_checkout({}, { locale }),
+							url: checkoutUrl(context.baseUrl, order.id),
+						},
+						{
 							text: m.telegram_check_payment({}, { locale }),
 							callback_data: `check:${order.id}`,
 						},
@@ -324,44 +320,13 @@ async function sendCreatedOrder(
 			{ locale },
 		),
 		paymentDue,
-		order.receiveAddress ? `收款地址：\n${order.receiveAddress}` : null,
+		order.checkoutUrl,
 	]
 		.filter(Boolean)
 		.join("\n");
 	await deliverInlineMessage(context, chosen, text, {
-		inline_keyboard: [
-			[
-				{
-					text: m.telegram_check_payment({}, { locale }),
-					callback_data: `check:${order.orderId}`,
-				},
-			],
-		],
+		inline_keyboard: orderKeyboard(order.orderId, order.checkoutUrl, locale),
 	});
-	if (order.receiveAddress && order.paymentAmount && order.paymentNetwork) {
-		const qr = paymentQrUrl(
-			paymentQrValue({
-				network: order.paymentNetwork,
-				actual_amount: order.paymentAmount,
-				receive_address: order.receiveAddress,
-			}),
-		);
-		await telegramCall(context.token, "sendPhoto", {
-			chat_id: chosen.from.id,
-			photo: qr,
-			caption: text,
-			reply_markup: {
-				inline_keyboard: [
-					[
-						{
-							text: m.telegram_check_payment({}, { locale }),
-							callback_data: `check:${order.orderId}`,
-						},
-					],
-				],
-			},
-		});
-	}
 }
 
 async function deliverInlineMessage(
@@ -398,40 +363,10 @@ export async function answerMessage(
 ) {
 	const text = message.text?.trim() ?? "";
 	const locale = telegramLocale(message.from);
-	if (
-		message.chat.type === "private" &&
-		message.from &&
-		text &&
-		!text.startsWith("/")
-	) {
-		const active = await context.db
-			.prepare(
-				"SELECT id, step FROM telegram_payment_sessions WHERE bot_id = ? AND telegram_user_id = ? AND expires_at > ? LIMIT 1",
-			)
-			.bind(context.botId, String(message.from.id), Date.now())
-			.first<{ id: string; step: string }>();
-		if (active?.step === "amount") {
-			await startTelegramPayment(context, message.chat.id, message.from, text);
-			return;
-		}
-	}
 	const commandMatch = text.match(/^\/([a-z0-9_]+)(?:@\w+)?(?:\s+(.*))?$/i);
 	if (!commandMatch) return;
 	const commandName = commandMatch[1];
 	if (!commandName) return;
-	if (
-		commandName.toLowerCase() === "pay" &&
-		message.chat.type === "private" &&
-		message.from
-	) {
-		await startTelegramPayment(
-			context,
-			message.chat.id,
-			message.from,
-			commandMatch[2]?.trim(),
-		);
-		return;
-	}
 	const command = await resolveBotCommand(
 		context.db,
 		commandName.toLowerCase(),
@@ -498,84 +433,6 @@ export async function answerMessage(
 					.map((order) => formatOrder(order, context.baseUrl, locale))
 					.join("\n\n")
 			: m.telegram_no_matching_order({}, { locale }),
-	});
-}
-
-async function startTelegramPayment(
-	context: TelegramUpdateContext,
-	chatId: number,
-	user: TelegramUser,
-	amount?: string,
-) {
-	const locale = telegramLocale(user);
-	const parsed = amount
-		? z
-				.object({
-					amount: z.string().regex(/^\d+(?:\.\d{1,8})?$/),
-					currency: z.string().length(3).default("USD"),
-				})
-				.safeParse({
-					amount: amount.split(/\s+/)[0],
-					currency: amount.split(/\s+/)[1] ?? "USD",
-				})
-		: null;
-	if (!parsed?.success) {
-		await context.db
-			.prepare(
-				"INSERT INTO telegram_payment_sessions (id, bot_id, telegram_user_id, chat_id, step, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'amount', ?, ?, ?) ON CONFLICT(bot_id, telegram_user_id) DO UPDATE SET step='amount', expires_at=excluded.expires_at, updated_at=excluded.updated_at",
-			)
-			.bind(
-				crypto.randomUUID(),
-				context.botId,
-				String(user.id),
-				String(chatId),
-				Date.now() + 15 * 60_000,
-				Date.now(),
-				Date.now(),
-			)
-			.run();
-		await telegramCall(context.token, "sendMessage", {
-			chat_id: chatId,
-			text: "请输入金额，例如：20 USD",
-		});
-		return;
-	}
-	const networks = await listPaymentNetworks(
-		context.db,
-		parsed.data.amount,
-		parsed.data.currency,
-	);
-	if (!networks.length) {
-		await telegramCall(context.token, "sendMessage", {
-			chat_id: chatId,
-			text: m.telegram_no_payment_options({}, { locale }),
-		});
-		return;
-	}
-	await context.db
-		.prepare(
-			"INSERT INTO telegram_payment_sessions (id, bot_id, telegram_user_id, chat_id, step, amount, currency, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'network', ?, ?, ?, ?, ?) ON CONFLICT(bot_id, telegram_user_id) DO UPDATE SET step='network', amount=excluded.amount, currency=excluded.currency, expires_at=excluded.expires_at, updated_at=excluded.updated_at",
-		)
-		.bind(
-			crypto.randomUUID(),
-			context.botId,
-			String(user.id),
-			String(chatId),
-			parsed.data.amount,
-			parsed.data.currency,
-			Date.now() + 15 * 60_000,
-			Date.now(),
-			Date.now(),
-		)
-		.run();
-	await telegramCall(context.token, "sendMessage", {
-		chat_id: chatId,
-		text: "请选择支付链：",
-		reply_markup: {
-			inline_keyboard: networks.map((n) => [
-				{ text: n.networkName, callback_data: `paynet:${n.network}` },
-			]),
-		},
 	});
 }
 
@@ -785,19 +642,6 @@ export async function answerCallback(
 	const match = callback.data?.match(
 		new RegExp(`^(order|check):(${orderIdPattern.source.slice(1, -1)})$`, "i"),
 	);
-	const paymentMatch = callback.data?.match(
-		/^(paynet|payasset|paycancel):([^:]+)(?::([^:]+))?$/,
-	);
-	if (paymentMatch) {
-		await handlePaymentCallback(
-			context,
-			callback,
-			paymentMatch[1] as string,
-			paymentMatch[2] as string,
-			paymentMatch[3],
-		);
-		return;
-	}
 	if (!match) {
 		await telegramCall(context.token, "answerCallbackQuery", {
 			callback_query_id: callback.id,
@@ -832,6 +676,10 @@ export async function answerCallback(
 				inline_keyboard: [
 					[
 						{
+							text: m.telegram_open_checkout({}, { locale }),
+							url: checkoutUrl(context.baseUrl, order.id),
+						},
+						{
 							text: m.telegram_check_payment({}, { locale }),
 							callback_data: `check:${order.id}`,
 						},
@@ -839,122 +687,6 @@ export async function answerCallback(
 				],
 			},
 		});
-}
-
-async function handlePaymentCallback(
-	context: TelegramUpdateContext,
-	callback: TelegramCallbackQuery,
-	action: string,
-	value: string,
-	asset?: string,
-) {
-	type PaymentSession = {
-		id: string;
-		step: string;
-		amount: string;
-		currency: string;
-		network: string | null;
-		asset: string | null;
-		chat_id: string;
-	};
-	const userId = String(callback.from.id);
-	const session = await context.db
-		.prepare(
-			"SELECT * FROM telegram_payment_sessions WHERE bot_id = ? AND telegram_user_id = ? AND expires_at > ? LIMIT 1",
-		)
-		.bind(context.botId, userId, Date.now())
-		.first<PaymentSession>();
-	if (!session) {
-		await telegramCall(context.token, "answerCallbackQuery", {
-			callback_query_id: callback.id,
-			text: "支付会话已过期，请重新发送 /pay",
-		});
-		return;
-	}
-	if (action === "paycancel") {
-		await context.db
-			.prepare("DELETE FROM telegram_payment_sessions WHERE id = ?")
-			.bind(session.id)
-			.run();
-		await telegramCall(context.token, "answerCallbackQuery", {
-			callback_query_id: callback.id,
-			text: "已取消",
-		});
-		return;
-	}
-	if (action === "paynet") {
-		const assets = await listPaymentAssets(
-			context.db,
-			session.amount,
-			session.currency,
-			value,
-		);
-		await context.db
-			.prepare(
-				"UPDATE telegram_payment_sessions SET step='asset', network=?, updated_at=? WHERE id=?",
-			)
-			.bind(value, Date.now(), session.id)
-			.run();
-		await telegramCall(context.token, "answerCallbackQuery", {
-			callback_query_id: callback.id,
-		});
-		await telegramCall(context.token, "sendMessage", {
-			chat_id: session.chat_id,
-			text: "请选择币种：",
-			reply_markup: {
-				inline_keyboard: [
-					...assets.map((a) => [
-						{
-							text: `${a.asset} · ${a.amount}`,
-							callback_data: `payasset:${a.receivingMethodId}:${a.asset}`,
-						},
-					]),
-					[{ text: "取消", callback_data: "paycancel:x" }],
-				],
-			},
-		});
-		return;
-	}
-	const order = await createTelegramPaymentOrder(
-		context.db,
-		{
-			amount: session.amount,
-			currency: session.currency,
-			receivingMethodId: value,
-			paymentAsset: asset ?? session.asset ?? "",
-			paymentNetwork: session.network ?? "",
-			botId: context.botId,
-			telegramUserId: userId,
-		},
-		context.baseUrl,
-	);
-	await context.db
-		.prepare(
-			"UPDATE telegram_payment_sessions SET step='created', order_id=?, updated_at=? WHERE id=?",
-		)
-		.bind(order.orderId, Date.now(), session.id)
-		.run();
-	const details = await getTelegramPaymentDetails(context.db, order.orderId);
-	if (!details) return;
-	const qr = paymentQrValue(details);
-	const text = `GMPay Edge\n订单：${order.externalOrderId}\n支付：${details.actual_amount ?? order.paymentAmount} ${details.token}\n网络：${details.network}\n收款地址：\n${details.receive_address}\n有效期：${new Date(order.expiresAt).toLocaleString()}`;
-	await telegramCall(context.token, "sendPhoto", {
-		chat_id: session.chat_id,
-		photo: paymentQrUrl(qr),
-		caption: text,
-		reply_markup: {
-			inline_keyboard: [
-				[
-					{ text: "查询支付", callback_data: `check:${order.orderId}` },
-					{ text: "取消", callback_data: "paycancel:x" },
-				],
-			],
-		},
-	});
-	await telegramCall(context.token, "answerCallbackQuery", {
-		callback_query_id: callback.id,
-		text: "订单已创建",
-	});
 }
 
 async function findOrders(
@@ -1020,6 +752,7 @@ function formatOrder(order: OrderRow, baseUrl: string, locale: TelegramLocale) {
 			{ time: new Date(order.expires_at).toLocaleString(locale) },
 			{ locale },
 		),
+		m.telegram_checkout({ url: checkoutUrl(baseUrl, order.id) }, { locale }),
 	].join("\n");
 }
 
@@ -1108,9 +841,10 @@ async function enqueuePaymentCheck(
 	});
 }
 
-function orderKeyboard(orderId: string, _url: string, locale: TelegramLocale) {
+function orderKeyboard(orderId: string, url: string, locale: TelegramLocale) {
 	return [
 		[
+			{ text: m.telegram_open_checkout({}, { locale }), url },
 			{
 				text: m.telegram_check_payment({}, { locale }),
 				callback_data: `check:${orderId}`,
