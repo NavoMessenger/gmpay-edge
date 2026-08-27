@@ -70,4 +70,18 @@ describe("webhook URL validation", () => {
 		).resolves.toEqual(["104.21.87.111"]);
 		expect(calls).toBe(4);
 	});
+
+	it("falls back to Quad9 DNS when the first two resolvers are unavailable", async () => {
+		const fetcher = async (input: RequestInfo | URL) => {
+			if (!String(input).includes("dns.quad9.net"))
+				return new Response("", { status: 503 });
+			return Response.json({
+				Status: 0,
+				Answer: [{ type: 1, data: "104.21.87.111" }],
+			});
+		};
+		await expect(
+			resolveWebhookHostname("merchant.example", fetcher),
+		).resolves.toEqual(["104.21.87.111"]);
+	});
 });
