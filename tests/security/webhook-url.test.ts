@@ -71,6 +71,19 @@ describe("webhook URL validation", () => {
 		expect(calls).toBe(4);
 	});
 
+	it("uses a Workers-compatible redirect mode and rejects DNS redirects", async () => {
+		const redirectModes: RequestRedirect[] = [];
+		const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+			redirectModes.push(init?.redirect ?? "follow");
+			return new Response("", { status: 302 });
+		};
+		await expect(
+			resolveWebhookHostname("merchant.example", fetcher),
+		).rejects.toThrow("Webhook DNS resolver temporarily unavailable");
+		expect(redirectModes).toHaveLength(18);
+		expect(redirectModes.every((mode) => mode === "manual")).toBe(true);
+	});
+
 	it("falls back to Quad9 DNS when the first two resolvers are unavailable", async () => {
 		const fetcher = async (input: RequestInfo | URL) => {
 			if (!String(input).includes("dns.quad9.net"))
