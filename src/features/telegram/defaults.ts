@@ -39,6 +39,18 @@ export const defaultTelegramCommands = [
 		handlerType: "new",
 	},
 	{
+		command: "pay",
+		descriptions: {
+			"en-US": "Pay in Telegram",
+			"ja-JP": "Telegram で支払う",
+			"ko-KR": "Telegram에서 결제",
+			"ru-RU": "Оплатить в Telegram",
+			"zh-TW": "在 Telegram 付款",
+			"zh-CN": "在 Telegram 内支付",
+		},
+		handlerType: "new",
+	},
+	{
 		command: "status",
 		descriptions: {
 			"en-US": "Check an order status",

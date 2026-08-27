@@ -16,6 +16,7 @@ import {
 	classifyResolvedWebhookUrl,
 	isSafeWebhookUrl,
 	resolveWebhookHostname,
+	WebhookDnsUnavailableError,
 	type WebhookHostnameResolver,
 } from "#/lib/webhook-url";
 import { redactAuditValue } from "#/server/audit-redaction";
@@ -190,6 +191,8 @@ export async function processWebhookMessage(
 const webhookPreflightDiagnostics = {
 	webhook_dns_resolution_failed:
 		"无法解析回调域名的公网 DNS 记录，请检查域名解析后重试。",
+	webhook_dns_resolution_unavailable:
+		"回调域名 DNS 服务暂时不可用，系统将自动重试，请稍后查看投递结果。",
 	webhook_url_unsafe:
 		"回调地址必须是可公开访问的 HTTPS 地址，且不能指向私有或保留网络。",
 	webhook_signing_secret_unavailable:
@@ -232,8 +235,12 @@ async function assertSafeWebhookDeliveryHostname(
 	let safety: Awaited<ReturnType<typeof classifyResolvedWebhookUrl>>;
 	try {
 		safety = await classifyResolvedWebhookUrl(url, resolveHostname);
-	} catch {
-		failWebhookPreflight("webhook_dns_resolution_failed");
+	} catch (error) {
+		failWebhookPreflight(
+			error instanceof WebhookDnsUnavailableError
+				? "webhook_dns_resolution_unavailable"
+				: "webhook_dns_resolution_failed",
+		);
 	}
 	if (safety === "dns_resolution_failed")
 		failWebhookPreflight("webhook_dns_resolution_failed");

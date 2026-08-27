@@ -59,6 +59,13 @@ export type ResolvedWebhookUrlSafety =
 	| "dns_resolution_failed"
 	| "unsafe";
 
+export class WebhookDnsUnavailableError extends Error {
+	constructor() {
+		super("Webhook DNS resolver temporarily unavailable");
+		this.name = "WebhookDnsUnavailableError";
+	}
+}
+
 export async function classifyResolvedWebhookUrl(
 	value: string,
 	resolveHostname: WebhookHostnameResolver,
@@ -83,27 +90,52 @@ export async function resolveWebhookHostname(
 	hostname: string,
 	fetcher: typeof fetch = fetch,
 ) {
-	const responses = await Promise.all(
-		["A", "AAAA"].map((type) =>
-			fetcher(
-				`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`,
-				{
-					headers: { accept: "application/dns-json" },
-					redirect: "error",
-					signal: AbortSignal.timeout(3_000),
-				},
-			),
-		),
-	);
-	const addresses: string[] = [];
-	for (const response of responses) {
-		if (!response.ok) throw new Error("Webhook DNS resolution failed");
-		const result = dnsResponseSchema.parse(await response.json());
-		if (result.Status !== 0) continue;
-		for (const answer of result.Answer ?? [])
-			if (answer.type === 1 || answer.type === 28) addresses.push(answer.data);
+	let hadSuccessfulResponse = false;
+	for (let attempt = 0; attempt < 3; attempt++) {
+		for (const resolver of ["cloudflare", "google"] as const) {
+			const results = await Promise.allSettled(
+				(["A", "AAAA"] as const).map((type) =>
+					queryDns(resolver, hostname, type, fetcher),
+				),
+			);
+			const addresses = results.flatMap((result) => {
+				if (result.status === "fulfilled") {
+					hadSuccessfulResponse = true;
+					return result.value;
+				}
+				return [];
+			});
+			if (addresses.length > 0) return [...new Set(addresses)];
+		}
+		if (attempt < 2)
+			await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
 	}
-	return addresses;
+	if (!hadSuccessfulResponse) throw new WebhookDnsUnavailableError();
+	return [];
+}
+
+async function queryDns(
+	resolver: "cloudflare" | "google",
+	hostname: string,
+	type: "A" | "AAAA",
+	fetcher: typeof fetch,
+) {
+	const url =
+		resolver === "cloudflare"
+			? `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`
+			: `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=${type}`;
+	const response = await fetcher(url, {
+		headers: { accept: "application/dns-json" },
+		redirect: "error",
+		signal: AbortSignal.timeout(3_000),
+	});
+	if (!response.ok) throw new Error("DNS resolver request failed");
+	const body = (await response.json()) as unknown;
+	const result = dnsResponseSchema.parse(body);
+	if (result.Status !== 0) return [];
+	return (result.Answer ?? [])
+		.filter((answer) => answer.type === 1 || answer.type === 28)
+		.map((answer) => answer.data);
 }
 
 function isIpAddress(hostname: string) {

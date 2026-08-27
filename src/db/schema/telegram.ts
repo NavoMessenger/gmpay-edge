@@ -85,3 +85,32 @@ export const telegramBotCommands = sqliteTable(
 		index("telegram_commands_sort_idx").on(table.enabled, table.sortOrder),
 	],
 );
+
+export const telegramPaymentSessions = sqliteTable(
+	"telegram_payment_sessions",
+	{
+		id: text("id").primaryKey(),
+		botId: text("bot_id")
+			.notNull()
+			.references(() => telegramBots.id, { onDelete: "cascade" }),
+		telegramUserId: text("telegram_user_id").notNull(),
+		chatId: text("chat_id").notNull(),
+		step: text("step", {
+			enum: ["amount", "network", "asset", "created"],
+		}).notNull(),
+		amount: text("amount"),
+		currency: text("currency"),
+		network: text("network"),
+		asset: text("asset"),
+		orderId: text("order_id"),
+		expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+		...timestamps,
+	},
+	(table) => [
+		uniqueIndex("telegram_payment_sessions_user_uidx").on(
+			table.botId,
+			table.telegramUserId,
+		),
+		index("telegram_payment_sessions_expiry_idx").on(table.expiresAt),
+	],
+);

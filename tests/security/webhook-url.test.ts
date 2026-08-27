@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	assertSafeResolvedWebhookUrl,
 	isSafeWebhookUrl,
+	resolveWebhookHostname,
 } from "#/lib/webhook-url";
 
 describe("webhook URL validation", () => {
@@ -51,5 +52,22 @@ describe("webhook URL validation", () => {
 				async () => [],
 			),
 		).resolves.toBe(false);
+	});
+
+	it("falls back to Google DNS when Cloudflare DNS is unavailable", async () => {
+		let calls = 0;
+		const fetcher = async (input: RequestInfo | URL) => {
+			calls += 1;
+			if (String(input).includes("cloudflare-dns.com"))
+				return new Response("", { status: 503 });
+			return Response.json({
+				Status: 0,
+				Answer: [{ type: 1, data: "104.21.87.111" }],
+			});
+		};
+		await expect(
+			resolveWebhookHostname("merchant.example", fetcher),
+		).resolves.toEqual(["104.21.87.111"]);
+		expect(calls).toBe(4);
 	});
 });
