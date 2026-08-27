@@ -61,6 +61,24 @@ describe("payment connection health concurrency", () => {
 		expect(batchSize).toBe(8);
 	});
 
+	it("uses an hourly default interval for automatic health checks", async () => {
+		let intervalMs: number | undefined;
+		const db = {} as D1Database;
+		const loadTargets = (async (
+			_database: D1Database,
+			_limit: number,
+			_now?: number,
+			_intervalMs?: number,
+		) => {
+			intervalMs = _intervalMs;
+			return [];
+		}) as typeof loadPaymentConnectionHealthTargets;
+
+		await refreshEnabledPaymentConnectionHealth(db, 20, loadTargets, 1_000_000);
+
+		expect(intervalMs).toBe(60 * 60_000);
+	});
+
 	it("loads all enabled chain adapters with one D1 query", async () => {
 		let statements = 0;
 		let query = "";

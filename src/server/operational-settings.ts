@@ -45,7 +45,7 @@ const defaults: OperationalSettings = {
 	paymentScanBatchSize: 100,
 	paymentScanIntervalMs: 60_000,
 	webhookRecoveryIntervalMs: 15 * 60_000,
-	rpcHealthIntervalMs: 15 * 60_000,
+	rpcHealthIntervalMs: 60 * 60_000,
 	reorgMonitorMs: 86_400_000,
 	retentionAuditMs: 31_536_000_000,
 };

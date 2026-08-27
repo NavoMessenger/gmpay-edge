@@ -185,7 +185,7 @@ export async function loadPaymentConnectionHealthTargets(
 	db: D1Database,
 	limit: number,
 	now = Date.now(),
-	intervalMs = 15 * 60_000,
+	intervalMs = 60 * 60_000,
 ) {
 	const connections = await db
 		.prepare(

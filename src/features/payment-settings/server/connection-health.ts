@@ -5,9 +5,20 @@ import {
 	loadPaymentConnectionHealthTargetsByIds,
 } from "#/features/payment-settings/server/method-adapter";
 
+const automaticHealthFailureThreshold = 3;
+
+type ConnectionHealthDependencies = {
+	createAdapter: typeof createPaymentConnectionAdapter;
+};
+
+const connectionHealthDefaults: ConnectionHealthDependencies = {
+	createAdapter: createPaymentConnectionAdapter,
+};
+
 export async function testPaymentConnection(
 	db: D1Database,
 	connectionId: string,
+	dependencies: ConnectionHealthDependencies = connectionHealthDefaults,
 ) {
 	const connection = await db
 		.prepare(
@@ -24,11 +35,19 @@ export async function testPaymentConnection(
 	if (!connection) throw paymentSettingsError("payment_connection_not_found");
 	const adapter =
 		connection.kind === "chain"
-			? await createPaymentConnectionAdapter(db, connectionId)
+			? await dependencies.createAdapter(db, connectionId)
 			: null;
 	const checkedAt = Date.now();
 	if (!adapter) {
-		await saveHealth(db, connectionId, false, null, checkedAt, "configuration");
+		await saveHealth(
+			db,
+			connectionId,
+			false,
+			null,
+			checkedAt,
+			"configuration",
+			"immediate",
+		);
 		return {
 			healthy: false,
 			latencyMs: null,
@@ -47,6 +66,7 @@ export async function testPaymentConnection(
 			health.latencyMs,
 			healthCheckedAt,
 			errorCode,
+			"immediate",
 		);
 		return {
 			healthy: health.healthy,
@@ -55,7 +75,15 @@ export async function testPaymentConnection(
 			errorCode,
 		};
 	} catch {
-		await saveHealth(db, connectionId, false, null, checkedAt, "network");
+		await saveHealth(
+			db,
+			connectionId,
+			false,
+			null,
+			checkedAt,
+			"network",
+			"immediate",
+		);
 		return {
 			healthy: false,
 			latencyMs: null,
@@ -70,7 +98,7 @@ export async function refreshEnabledPaymentConnectionHealth(
 	limit = 20,
 	loadTargets: typeof loadPaymentConnectionHealthTargets = loadPaymentConnectionHealthTargets,
 	now = Date.now(),
-	intervalMs = 15 * 60_000,
+	intervalMs = 60 * 60_000,
 ) {
 	const targets = await loadTargets(db, limit, now, intervalMs);
 	return refreshHealthTargets(db, targets);
@@ -108,6 +136,7 @@ async function refreshHealthTargets(
 					result.latencyMs,
 					result.checkedAt,
 					result.errorCode,
+					"automatic",
 				),
 			),
 		);
@@ -158,8 +187,9 @@ async function saveHealth(
 	latency: number | null,
 	checkedAt: number,
 	errorCode: string | null,
+	mode: "automatic" | "immediate" = "immediate",
 ) {
-	await healthUpdate(db, id, healthy, latency, checkedAt, errorCode).run();
+	await healthUpdate(db, id, healthy, latency, checkedAt, errorCode, mode).run();
 }
 
 function healthUpdate(
@@ -169,17 +199,37 @@ function healthUpdate(
 	latency: number | null,
 	checkedAt: number,
 	errorCode: string | null,
+	mode: "automatic" | "immediate",
 ) {
+	const immediate = mode === "immediate" ? 1 : 0;
 	return db
 		.prepare(
-			`UPDATE payment_ingresses SET health_status = ?, last_latency_ms = ?,
-			 last_checked_at = ?, last_error_code = ?, updated_at = ? WHERE id = ?`,
+			`UPDATE payment_ingresses SET last_latency_ms = ?,
+			 last_checked_at = ?, last_error_code = ?,
+			 consecutive_health_failures = CASE
+			  WHEN ? = 1 THEN 0
+			  WHEN ? = 1 THEN ?
+			  ELSE consecutive_health_failures + 1
+			 END,
+			 health_status = CASE
+			  WHEN ? = 1 THEN 'healthy'
+			  WHEN ? = 1 THEN 'unhealthy'
+			  WHEN health_status = 'unknown' THEN 'unknown'
+			  WHEN consecutive_health_failures + 1 >= ? THEN 'unhealthy'
+			  ELSE health_status
+			 END,
+			 updated_at = ? WHERE id = ?`,
 		)
 		.bind(
-			healthy ? "healthy" : "unhealthy",
 			latency,
 			checkedAt,
 			errorCode,
+			healthy ? 1 : 0,
+			immediate,
+			automaticHealthFailureThreshold,
+			healthy ? 1 : 0,
+			immediate,
+			automaticHealthFailureThreshold,
 			checkedAt,
 			id,
 		);

@@ -98,7 +98,7 @@ const defaults: Record<SettingKey, SettingValue> = {
 	"payments.scan_batch_size": 100,
 	"payments.scan_interval_ms": 60_000,
 	"payments.webhook_recovery_interval_ms": 15 * 60_000,
-	"payments.rpc_health_interval_ms": 15 * 60_000,
+	"payments.rpc_health_interval_ms": 60 * 60_000,
 	"payments.reorg_monitor_ms": 86_400_000,
 	"retention.audit_ms": 31_536_000_000,
 	"runtime.better_auth_secret": "",
