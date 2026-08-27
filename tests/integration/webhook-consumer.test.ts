@@ -18,6 +18,7 @@ import {
 } from "#/features/webhooks/server/retry";
 import type { WebhookQueueMessage } from "#/features/webhooks/types";
 import { encryptSecret } from "#/lib/secrets";
+import { WebhookDnsUnavailableError } from "#/lib/webhook-url";
 import { applyMigrations } from "./migrations";
 
 describe("Webhook queue consumer on D1", () => {
@@ -581,6 +582,94 @@ describe("Webhook queue consumer on D1", () => {
 		expect(attempt?.request_snapshot).toBeNull();
 	});
 
+	it("uses only a recent public DNS cache when resolvers are unavailable", async () => {
+		const now = Date.now();
+		await db
+			.prepare(
+				"INSERT INTO webhook_events (id, order_id, type, deduplication_key, payload, created_at, updated_at) VALUES ('event-dns-cache', 'order-webhook', 'order.paid', 'event:dns-cache', '{}', ?, ?)",
+			)
+			.bind(now, now)
+			.run();
+		await db
+			.prepare(
+				"INSERT INTO webhook_deliveries (id, event_id, order_id, api_key_id, status, attempt_count, created_at, updated_at) VALUES ('delivery-dns-cache', 'event-dns-cache', 'order-webhook', 'api-key', 'queued', 0, ?, ?)",
+			)
+			.bind(now, now)
+			.run();
+		const values = new Map<string, string>();
+		const cache = {
+			get: async (key: string) => values.get(key) ?? null,
+			put: async (key: string, value: string) => {
+				values.set(key, value);
+			},
+		};
+		const initial = fakeMessage("delivery-dns-cache", 1);
+		await expect(
+			processWebhookMessage(
+				db,
+				initial.message,
+				vi.fn().mockResolvedValue(new Response("ok", { status: 200 })),
+				undefined,
+				{ cache, resolveHostname: async () => ["104.21.87.111"] },
+			),
+		).resolves.toMatchObject({ success: true });
+		expect(values.size).toBe(1);
+
+		await db
+			.prepare(
+				"UPDATE webhook_deliveries SET status = 'queued', attempt_count = 1, completed_at = NULL WHERE id = 'delivery-dns-cache'",
+			)
+			.run();
+		const fallback = fakeMessage("delivery-dns-cache", 2);
+		const fetcher = vi
+			.fn()
+			.mockResolvedValue(new Response("ok", { status: 200 }));
+		await expect(
+			processWebhookMessage(db, fallback.message, fetcher, undefined, {
+				cache,
+				resolveHostname: async () => {
+					throw new WebhookDnsUnavailableError();
+				},
+			}),
+		).resolves.toMatchObject({ success: true });
+		expect(fetcher).toHaveBeenCalledOnce();
+		const cachedAttempt = await db
+			.prepare(
+				"SELECT error_code, diagnostic_detail FROM webhook_attempts WHERE delivery_id = 'delivery-dns-cache' AND attempt = 2",
+			)
+			.first<{ error_code: string | null; diagnostic_detail: string | null }>();
+		expect(cachedAttempt).toMatchObject({
+			error_code: null,
+			diagnostic_detail: expect.stringContaining("已使用最近验证"),
+		});
+
+		await db
+			.prepare(
+				"UPDATE webhook_deliveries SET status = 'queued', attempt_count = 2, completed_at = NULL WHERE id = 'delivery-dns-cache'",
+			)
+			.run();
+		values.set("webhook-dns-safe:v1:callback.example", "not-json");
+		const invalidCache = fakeMessage("delivery-dns-cache", 3);
+		const unavailableFetcher = vi.fn();
+		await expect(
+			processWebhookMessage(
+				db,
+				invalidCache.message,
+				unavailableFetcher,
+				undefined,
+				{
+					cache,
+					resolveHostname: async () => {
+						throw new WebhookDnsUnavailableError();
+					},
+				},
+			),
+		).resolves.toMatchObject({
+			errorCode: "webhook_dns_resolution_unavailable",
+		});
+		expect(unavailableFetcher).not.toHaveBeenCalled();
+	});
+
 	it("classifies DNS, signing, and event data failures before delivery", async () => {
 		const fetcher = vi.fn<typeof fetch>();
 		await db
@@ -703,6 +792,7 @@ function fakeMessage(deliveryId: string, attempts: number) {
 				"delivery-manual": "event-manual",
 				"delivery-unsafe": "event-unsafe",
 				"delivery-gmpay": "event-gmpay",
+				"delivery-dns-cache": "event-dns-cache",
 				"delivery-epay": "event-epay",
 			}[deliveryId] ?? "event",
 		attempt: attempts,

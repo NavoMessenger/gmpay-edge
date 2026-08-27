@@ -21,7 +21,12 @@ import {
 } from "#/lib/webhook-url";
 import { redactAuditValue } from "#/server/audit-redaction";
 import { loadOperationalSettings } from "#/server/operational-settings";
+import type { RuntimeCache } from "#/server/runtime/types";
 import { loadRuntimeConfig, type RuntimeConfig } from "#/server/runtime-config";
+
+const webhookDnsCacheTtlSeconds = 10 * 60;
+const webhookDnsCacheDiagnostic =
+	"回调域名 DNS 服务暂时不可用，已使用最近验证的公网 DNS 解析结果继续投递。";
 
 export interface WebhookQueueMessageLike {
 	body: WebhookQueueMessage;
@@ -40,6 +45,7 @@ export async function processWebhookMessage(
 		settings?: Awaited<ReturnType<typeof loadOperationalSettings>>;
 		runtime?: RuntimeConfig;
 		resolveHostname?: WebhookHostnameResolver;
+		cache?: Pick<RuntimeCache, "get" | "put">;
 	} = {},
 ) {
 	const settings = context.settings ?? (await loadOperationalSettings(db));
@@ -103,9 +109,16 @@ export async function processWebhookMessage(
 		const resolveHostname =
 			context.resolveHostname ??
 			(fetcher === fetch ? resolveWebhookHostname : undefined);
-		if (resolveHostname)
-			await assertSafeWebhookDeliveryHostname(delivery.url, resolveHostname);
+		const dnsCacheDiagnostic = resolveHostname
+			? await assertSafeWebhookDeliveryHostname(
+					delivery.url,
+					resolveHostname,
+					context.cache,
+				)
+			: undefined;
 		result = await deliverWebhook(delivery, fetcher, settings.webhookTimeoutMs);
+		if (dnsCacheDiagnostic)
+			result = { ...result, diagnosticDetail: dnsCacheDiagnostic };
 	} catch (error) {
 		result = preflightFailureResult(error, startedAt);
 	}
@@ -231,11 +244,28 @@ function preflightFailureResult(error: unknown, startedAt: number) {
 async function assertSafeWebhookDeliveryHostname(
 	url: string,
 	resolveHostname: WebhookHostnameResolver,
+	cache?: Pick<RuntimeCache, "get" | "put">,
 ) {
+	if (!isSafeWebhookUrl(url)) failWebhookPreflight("webhook_url_unsafe");
+	const hostname = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+	let resolvedAddresses: string[] | undefined;
 	let safety: Awaited<ReturnType<typeof classifyResolvedWebhookUrl>>;
 	try {
-		safety = await classifyResolvedWebhookUrl(url, resolveHostname);
+		safety = await classifyResolvedWebhookUrl(url, async (name) => {
+			resolvedAddresses = await resolveHostname(name);
+			return resolvedAddresses;
+		});
 	} catch (error) {
+		if (error instanceof WebhookDnsUnavailableError) {
+			const cachedAddresses = await loadSafeWebhookDnsCache(cache, hostname);
+			if (cachedAddresses) {
+				safety = await classifyResolvedWebhookUrl(
+					url,
+					async () => cachedAddresses,
+				);
+				if (safety === "safe") return webhookDnsCacheDiagnostic;
+			}
+		}
 		failWebhookPreflight(
 			error instanceof WebhookDnsUnavailableError
 				? "webhook_dns_resolution_unavailable"
@@ -245,6 +275,57 @@ async function assertSafeWebhookDeliveryHostname(
 	if (safety === "dns_resolution_failed")
 		failWebhookPreflight("webhook_dns_resolution_failed");
 	if (safety === "unsafe") failWebhookPreflight("webhook_url_unsafe");
+	if (resolvedAddresses)
+		await storeSafeWebhookDnsCache(cache, hostname, resolvedAddresses);
+}
+
+function webhookDnsCacheKey(hostname: string) {
+	return `webhook-dns-safe:v1:${hostname}`;
+}
+
+async function loadSafeWebhookDnsCache(
+	cache: Pick<RuntimeCache, "get" | "put"> | undefined,
+	hostname: string,
+) {
+	if (!cache) return null;
+	try {
+		const raw = await cache.get(webhookDnsCacheKey(hostname));
+		if (!raw) return null;
+		const value: unknown = JSON.parse(raw);
+		if (
+			typeof value !== "object" ||
+			value === null ||
+			!("hostname" in value) ||
+			!("addresses" in value) ||
+			!("verifiedAt" in value) ||
+			value.hostname !== hostname ||
+			!Array.isArray(value.addresses) ||
+			value.addresses.length === 0 ||
+			value.addresses.some((address) => typeof address !== "string") ||
+			typeof value.verifiedAt !== "number" ||
+			!Number.isFinite(value.verifiedAt) ||
+			Date.now() - value.verifiedAt > webhookDnsCacheTtlSeconds * 1_000
+		)
+			return null;
+		return value.addresses;
+	} catch {
+		return null;
+	}
+}
+
+async function storeSafeWebhookDnsCache(
+	cache: Pick<RuntimeCache, "get" | "put"> | undefined,
+	hostname: string,
+	addresses: string[],
+) {
+	if (!cache) return;
+	await cache
+		.put(
+			webhookDnsCacheKey(hostname),
+			JSON.stringify({ hostname, addresses, verifiedAt: Date.now() }),
+			{ expirationTtl: webhookDnsCacheTtlSeconds },
+		)
+		.catch(() => undefined);
 }
 
 export function redactResponseExcerpt(value: string | undefined) {

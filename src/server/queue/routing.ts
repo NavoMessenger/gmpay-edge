@@ -205,6 +205,7 @@ async function processQueueMessage(
 		return processWebhookMessage(env.DB, message, fetch, env.WEBHOOK_QUEUE, {
 			...(settings ? { settings } : {}),
 			...(runtime ? { runtime } : {}),
+			...(env.CACHE ? { cache: env.CACHE } : {}),
 		});
 	}
 	if (isPaymentScanQueueMessage(message))
