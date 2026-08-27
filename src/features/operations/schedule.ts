@@ -52,7 +52,7 @@ export function formatScheduleInterval(durationMs: number, locale: string) {
 export function nextTaskExecutionAt(
 	task: ScheduledTaskName,
 	lastStartedAt: string | null,
-	rateIntervalsMs: { crypto: number; fiat: number },
+	intervalsMs: { crypto: number; fiat: number; rpcHealth: number },
 	now = Date.now(),
 ) {
 	if (task === "payment_defaults") return null;
@@ -64,11 +64,13 @@ export function nextTaskExecutionAt(
 	}
 	if (task === "crypto_rate_sync" || task === "fiat_rate_sync") {
 		const intervalMs =
-			task === "crypto_rate_sync"
-				? rateIntervalsMs.crypto
-				: rateIntervalsMs.fiat;
+			task === "crypto_rate_sync" ? intervalsMs.crypto : intervalsMs.fiat;
 		const last = lastStartedAt ? new Date(lastStartedAt).getTime() : now;
 		return new Date(Math.max(last + intervalMs, now)).toISOString();
+	}
+	if (task === "rpc_health") {
+		const last = lastStartedAt ? new Date(lastStartedAt).getTime() : now;
+		return new Date(Math.max(last + intervalsMs.rpcHealth, now)).toISOString();
 	}
 	return new Date(Math.floor(now / 60_000) * 60_000 + 60_000).toISOString();
 }

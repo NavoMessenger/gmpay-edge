@@ -20,7 +20,7 @@ export async function loadAdminWebhookDelivery(db: D1Database, id: string) {
 			.bind(id),
 		db
 			.prepare(`SELECT attempt, request_id, response_status, duration_ms,
-			error_code, response_excerpt, request_snapshot, attempted_at
+					error_code, diagnostic_detail, response_excerpt, request_snapshot, attempted_at
 			FROM webhook_attempts WHERE delivery_id = ?
 			ORDER BY attempt DESC`)
 			.bind(id),
@@ -60,6 +60,7 @@ export async function loadAdminWebhookDelivery(db: D1Database, id: string) {
 			responseStatus: attempt.response_status,
 			durationMs: attempt.duration_ms,
 			errorCode: attempt.error_code,
+			diagnosticDetail: attempt.diagnostic_detail,
 			responseExcerpt: attempt.response_excerpt,
 			requestSnapshot: parseRequestSnapshot(attempt.request_snapshot),
 			attemptedAt: new Date(attempt.attempted_at).toISOString(),
@@ -102,6 +103,7 @@ interface AttemptRow {
 	response_status: number | null;
 	duration_ms: number | null;
 	error_code: string | null;
+	diagnostic_detail: string | null;
 	response_excerpt: string | null;
 	request_snapshot: string | null;
 	attempted_at: number;

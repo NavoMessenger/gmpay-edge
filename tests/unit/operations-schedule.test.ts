@@ -74,7 +74,10 @@ describe("operations task schedules", () => {
 		expect(
 			nextTaskExecutionAt("payment_defaults", null, rates, now),
 		).toBeNull();
+		expect(
+			nextTaskExecutionAt("rpc_health", "2026-07-13T02:00:00.000Z", rates, now),
+		).toBe("2026-07-13T03:00:00.000Z");
 	});
 });
 
-const rates = { crypto: 300_000, fiat: 86_400_000 };
+const rates = { crypto: 300_000, fiat: 86_400_000, rpcHealth: 3_600_000 };

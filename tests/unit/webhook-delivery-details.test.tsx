@@ -71,6 +71,7 @@ describe("Webhook delivery details", () => {
 					responseStatus: 500,
 					durationMs: 123,
 					errorCode: "http_error",
+					diagnosticDetail: "回调地址必须是可公开访问的 HTTPS 地址。",
 					responseExcerpt: '{"message":"rejected"}',
 					requestSnapshot: {
 						method: "POST",
@@ -92,6 +93,9 @@ describe("Webhook delivery details", () => {
 			expect(document.body.textContent).toContain("MERCHANT-100");
 		});
 		expect(document.body.textContent).toContain("request-id");
+		expect(document.body.textContent).toContain(
+			"回调地址必须是可公开访问的 HTTPS 地址。",
+		);
 		expect(document.body.textContent).toContain("[REDACTED]");
 		expect(document.body.textContent).not.toContain("merchant-secret");
 	});

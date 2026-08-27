@@ -118,7 +118,11 @@ async function runMaintenanceInvocation(
 		}
 	};
 	const settings = await loadOperationalSettings(env.DB);
-	const retentionClaim = await claimDailyRetention(env.DB, now);
+	const retentionClaim = await claimRetention(
+		env.DB,
+		now,
+		settings.retentionCleanupIntervalMs,
+	);
 	const retentionWork =
 		retentionClaim !== null &&
 		((await hasRetentionCleanupWork(env.DB, now, settings.retentionAuditMs)) ||
@@ -244,12 +248,14 @@ type DailyRetentionClaim = {
 	leaseUntil: number;
 };
 
-async function claimDailyRetention(
+async function claimRetention(
 	db: D1Database,
 	now: number,
+	intervalMs: number,
 ): Promise<DailyRetentionClaim | null> {
 	const day = Math.floor(now / 86_400_000);
 	const claim = { day, leaseUntil: now + DAILY_RETENTION_LEASE_MS };
+	const dueBefore = now - intervalMs;
 	const result = await db
 		.prepare(
 			`INSERT INTO system_settings
@@ -257,20 +263,18 @@ async function claimDailyRetention(
 			 VALUES ('runtime.retention_schedule', ?, 0, NULL, ?, ?)
 			 ON CONFLICT(key) DO UPDATE SET value = excluded.value,
 			  updated_at = excluded.updated_at
-			 WHERE COALESCE(CAST(json_extract(system_settings.value, '$.day') AS INTEGER), -1) < ?
-			 OR (
-			  CAST(json_extract(system_settings.value, '$.day') AS INTEGER) = ?
-			  AND json_extract(system_settings.value, '$.completed') = 0
-			  AND CAST(json_extract(system_settings.value, '$.leaseUntil') AS INTEGER) <= ?
-			 )`,
+				 WHERE (
+				  json_extract(system_settings.value, '$.completed') = 0
+				  AND CAST(json_extract(system_settings.value, '$.leaseUntil') AS INTEGER) <= ?
+				 )
+				 OR COALESCE(CAST(json_extract(system_settings.value, '$.completedAt') AS INTEGER), 0) <= ?`,
 		)
 		.bind(
 			JSON.stringify({ ...claim, completed: false }),
 			now,
 			now,
-			day,
-			day,
-			now,
+			dueBefore,
+			dueBefore,
 		)
 		.run();
 	return result.meta.changes === 1 ? claim : null;
@@ -291,7 +295,12 @@ async function completeDailyRetention(
 			 AND json_extract(value, '$.completed') = 0`,
 		)
 		.bind(
-			JSON.stringify({ day: claim.day, leaseUntil: null, completed: true }),
+			JSON.stringify({
+				day: claim.day,
+				leaseUntil: null,
+				completed: true,
+				completedAt: now,
+			}),
 			now,
 			claim.day,
 			claim.leaseUntil,

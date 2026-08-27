@@ -57,6 +57,13 @@
       "when": 1787282057542,
       "tag": "0007_rpc_health_debounce",
       "breakpoints": true
-    }
+	},
+	{
+	  "idx": 8,
+	  "version": "6",
+	  "when": 1787529600000,
+	  "tag": "0008_webhook_attempt_diagnostics",
+	  "breakpoints": true
+	}
   ]
 }

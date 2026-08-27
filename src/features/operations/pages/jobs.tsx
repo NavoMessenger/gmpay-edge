@@ -2,10 +2,12 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { MoreHorizontal, Play } from "lucide-react";
+import { MoreHorizontal, Pencil, Play } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { ProButton } from "#/components/pro/base/button";
 import { ProTable } from "#/components/pro/table";
+import { ModalForm } from "#/components/pro/form";
 import { Badge } from "#/components/ui/badge";
 import {
 	DropdownMenu,
@@ -23,6 +25,7 @@ import {
 import {
 	getOperationsOverviewFn,
 	runOperationsTaskFn,
+	updateOperationScheduleFn,
 } from "#/features/operations/server/admin";
 import type { OperationsTask } from "#/features/operations/server/run-task";
 import { PageHeader } from "#/layouts/components/page-header";
@@ -40,6 +43,8 @@ type TaskRow = {
 	manual: boolean;
 	run: TaskRun | null;
 	nextExecutionAt: string | null;
+	intervalMs: number | null;
+	configKey: string | null;
 };
 
 type TaskName = (typeof scheduledTaskCatalog)[number]["task"];
@@ -61,22 +66,37 @@ export function JobsPage() {
 		onError: (error) =>
 			toast.error(operationsErrorMessage(error, m.jobs_task_failed)),
 	});
+	const saveSchedule = useMutation({
+		mutationFn: updateOperationScheduleFn,
+		onSuccess: async () => {
+			await client.invalidateQueries({ queryKey: ["admin", "operations"] });
+			toast.success(m.settings_saved());
+		},
+		onError: (error) =>
+			toast.error(operationsErrorMessage(error, m.jobs_task_failed)),
+	});
 	const latest = new Map(query.data?.taskRuns.map((run) => [run.task, run]));
-	const rateIntervalsMs = query.data?.rateIntervals ?? {
+	const intervalsMs = query.data?.rateIntervals ?? {
 		crypto: 3_600_000,
 		fiat: 86_400_000,
+		rpcHealth: 3_600_000,
+		cleanup: 86_400_000,
+		scan: 60_000,
+		webhookRecovery: 900_000,
 	};
 	const rows: TaskRow[] = scheduledTaskCatalog.map((entry) => {
 		const run = latest.get(entry.task) ?? null;
 		return {
 			...entry,
-			schedule: taskScheduleLabel(entry.task, rateIntervalsMs),
+			schedule: taskScheduleLabel(entry.task, intervalsMs),
 			run,
 			nextExecutionAt: nextTaskExecutionAt(
 				entry.task,
 				run?.startedAt ?? null,
-				rateIntervalsMs,
+				intervalsMs,
 			),
+			intervalMs: taskInterval(entry.task, intervalsMs),
+			configKey: taskConfigKey(entry.task),
 		};
 	});
 	const columns: ColumnDef<TaskRow>[] = [
@@ -85,6 +105,18 @@ export function JobsPage() {
 			header: m.jobs_task_name(),
 			cell: ({ row }) => taskLabel(row.original.task),
 			meta: { search: true },
+		},
+		{
+			id: "config",
+			header: m.common_actions(),
+			cell: ({ row }) => (
+				<TaskScheduleControl
+					row={row.original}
+					onSave={(key, intervalMs) =>
+						saveSchedule.mutate({ data: { key, intervalMs } })
+					}
+				/>
+			),
 		},
 		{
 			accessorKey: "schedule",
@@ -181,15 +213,113 @@ export function JobsPage() {
 	);
 }
 
+function taskInterval(
+	task: TaskName,
+	intervals: {
+		crypto: number;
+		fiat: number;
+		rpcHealth: number;
+		cleanup: number;
+		scan: number;
+		webhookRecovery: number;
+	},
+) {
+	if (task === "crypto_rate_sync") return intervals.crypto;
+	if (task === "fiat_rate_sync") return intervals.fiat;
+	if (task === "rpc_health") return intervals.rpcHealth;
+	if (task === "retention_cleanup") return intervals.cleanup;
+	if (task === "payment_scan_enqueue") return intervals.scan;
+	if (task === "webhook_outbox") return intervals.webhookRecovery;
+	return null;
+}
+
+function taskConfigKey(task: TaskName) {
+	if (task === "payment_scan_enqueue") return "payments.scan_interval_ms";
+	if (task === "webhook_outbox") return "payments.webhook_recovery_interval_ms";
+	if (task === "rpc_health") return "payments.rpc_health_interval_ms";
+	if (task === "retention_cleanup") return "retention.cleanup_interval_ms";
+	return null;
+}
+
+function TaskScheduleControl({
+	row,
+	onSave,
+}: {
+	row: TaskRow;
+	onSave: (key: string, intervalMs: number) => void;
+}) {
+	if (row.task === "crypto_rate_sync" || row.task === "fiat_rate_sync")
+		return (
+			<Link
+				className="text-primary underline"
+				to={
+					row.task === "crypto_rate_sync"
+						? "/admin/payment-settings/rates"
+						: "/admin/payment-settings/rates/fiat"
+				}
+			>
+				{m.common_edit()}
+			</Link>
+		);
+	if (!row.configKey || row.intervalMs == null)
+		return (
+			<span className="text-muted-foreground">
+				{m.jobs_schedule_triggered()}
+			</span>
+		);
+	return (
+		<ModalForm
+			trigger={
+				<ProButton variant="ghost" size="icon-sm" tooltip={m.common_edit()}>
+					<Pencil />
+				</ProButton>
+			}
+			title={m.jobs_schedule_configure()}
+			description={m.jobs_schedule_configure_description()}
+			initialValues={{ interval: String(row.intervalMs / 1000) }}
+			schema={[
+				{
+					name: "interval",
+					label: m.jobs_schedule_interval_seconds(),
+					valueType: "text",
+					required: true,
+					fieldProps: {
+						min: row.task === "payment_scan_enqueue" ? 15 : 60,
+						max: row.task === "retention_cleanup" ? 604800 : 3600,
+					},
+				},
+			]}
+			onFinish={async (values) =>
+				onSave(row.configKey!, Number(values.interval) * 1000)
+			}
+		/>
+	);
+}
+
 function taskScheduleLabel(
 	task: TaskName,
-	rateIntervalsMs: { crypto: number; fiat: number },
+	intervalsMs: {
+		crypto: number;
+		fiat: number;
+		rpcHealth: number;
+		cleanup: number;
+		scan: number;
+		webhookRecovery: number;
+	},
 ) {
-	if (task === "payment_defaults") return null;
+	if (
+		task === "payment_defaults" ||
+		task === "order_expiration" ||
+		task === "frequent_cleanup"
+	)
+		return null;
 	let intervalMs = 60_000;
-	if (task === "crypto_rate_sync") intervalMs = rateIntervalsMs.crypto;
-	if (task === "fiat_rate_sync") intervalMs = rateIntervalsMs.fiat;
-	if (task === "retention_cleanup") intervalMs = 86_400_000;
+	if (task === "crypto_rate_sync") intervalMs = intervalsMs.crypto;
+	if (task === "fiat_rate_sync") intervalMs = intervalsMs.fiat;
+	if (task === "rpc_health") intervalMs = intervalsMs.rpcHealth;
+	if (task === "retention_cleanup") intervalMs = intervalsMs.cleanup;
+	if (task === "payment_scan_enqueue") intervalMs = intervalsMs.scan;
+	if (task === "webhook_outbox") intervalMs = intervalsMs.webhookRecovery;
 	return m.jobs_schedule_every({
 		time: formatScheduleInterval(intervalMs, getLocale()),
 	});

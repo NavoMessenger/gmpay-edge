@@ -354,7 +354,7 @@ function WebhookDeliveryDetails({ details }: { details: DeliveryDetails }) {
 				{details.attempts.length ? (
 					<div className="space-y-3">
 						{details.attempts.map((attempt) => (
-							<AttemptDetails key={attempt.attempt} attempt={attempt} />
+							<AttemptDetails key={attempt.requestId} attempt={attempt} />
 						))}
 					</div>
 				) : (
@@ -401,6 +401,12 @@ function AttemptDetails({
 					value={attempt.errorCode ?? "—"}
 				/>
 			</dl>
+			{attempt.diagnosticDetail ? (
+				<DetailValue
+					label={m.webhooks_diagnostic_detail()}
+					value={attempt.diagnosticDetail}
+				/>
+			) : null}
 			<RequestSnapshot snapshot={attempt.requestSnapshot} />
 			{attempt.responseExcerpt ? (
 				<CodeBlock

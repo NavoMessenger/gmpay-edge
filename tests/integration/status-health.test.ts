@@ -32,7 +32,17 @@ describe("public health receiving-method readiness", () => {
 		await db.batch([
 			db
 				.prepare(
+					"INSERT OR IGNORE INTO payment_rails (code, name, kind, adapter, created_at, updated_at) VALUES ('test-chain', 'Test Chain', 'chain', 'evm', ?, ?)",
+				)
+				.bind(now, now),
+			db
+				.prepare(
 					"INSERT OR IGNORE INTO payment_rails (code, name, kind, adapter, created_at, updated_at) VALUES ('okpay', 'OKPay', 'wallet', 'okpay', ?, ?)",
+				)
+				.bind(now, now),
+			db
+				.prepare(
+					"INSERT OR IGNORE INTO payment_ingresses (id, rail_code, name, type, endpoint, enabled, health_status, last_checked_at, created_at, updated_at) VALUES ('connection-chain', 'test-chain', 'Test RPC', 'rpc', 'https://rpc.example', 1, 'healthy', 123, ?, ?)",
 				)
 				.bind(now, now),
 			db
@@ -270,6 +280,30 @@ describe("public health receiving-method readiness", () => {
 		expect(connection).toEqual({
 			health_status: "unknown",
 			last_error_code: null,
+		});
+	});
+
+	it("does not treat payment scans as scheduled health checks", async () => {
+		await updateConnectionHealth(
+			db,
+			"connection-chain",
+			"unhealthy",
+			"network",
+		);
+		const connection = await db
+			.prepare(
+				"SELECT health_status, last_checked_at, last_error_code FROM payment_ingresses WHERE id = ?",
+			)
+			.bind("connection-chain")
+			.first<{
+				health_status: string;
+				last_checked_at: number | null;
+				last_error_code: string | null;
+			}>();
+		expect(connection).toEqual({
+			health_status: "unhealthy",
+			last_checked_at: 123,
+			last_error_code: "network",
 		});
 	});
 });

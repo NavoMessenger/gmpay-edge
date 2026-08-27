@@ -11,6 +11,8 @@ export interface WebhookDeliveryResult {
 	status?: number;
 	durationMs: number;
 	errorCode?: string;
+	/** Safe, administrator-facing explanation for a pre-delivery failure. */
+	diagnosticDetail?: string;
 	responseExcerpt?: string;
 	requestSnapshot?: WebhookRequestSnapshot;
 	/** Minimum delay requested by the receiver, capped to the local retry window. */

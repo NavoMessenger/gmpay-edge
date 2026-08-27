@@ -14,6 +14,7 @@ type OperationalSettings = {
 	paymentScanBatchSize: number;
 	paymentScanIntervalMs: number;
 	webhookRecoveryIntervalMs: number;
+	retentionCleanupIntervalMs: number;
 	rpcHealthIntervalMs: number;
 	reorgMonitorMs: number;
 	retentionAuditMs: number;
@@ -30,6 +31,7 @@ const operationalSettingsSchema = z.object({
 	paymentScanBatchSize: z.number().int().min(1).max(100),
 	paymentScanIntervalMs: z.number().int().min(15_000).max(3_600_000),
 	webhookRecoveryIntervalMs: z.number().int().min(60_000).max(3_600_000),
+	retentionCleanupIntervalMs: z.number().int().min(3_600_000).max(604_800_000),
 	rpcHealthIntervalMs: z.number().int().min(60_000).max(3_600_000),
 	reorgMonitorMs: z.number().int().min(3_600_000).max(604_800_000),
 	retentionAuditMs: z.number().int().min(2_592_000_000).max(315_360_000_000),
@@ -45,6 +47,7 @@ const defaults: OperationalSettings = {
 	paymentScanBatchSize: 100,
 	paymentScanIntervalMs: 60_000,
 	webhookRecoveryIntervalMs: 15 * 60_000,
+	retentionCleanupIntervalMs: 86_400_000,
 	rpcHealthIntervalMs: 60 * 60_000,
 	reorgMonitorMs: 86_400_000,
 	retentionAuditMs: 31_536_000_000,
@@ -61,6 +64,7 @@ const keys = {
 	"payments.scan_batch_size": "paymentScanBatchSize",
 	"payments.scan_interval_ms": "paymentScanIntervalMs",
 	"payments.webhook_recovery_interval_ms": "webhookRecoveryIntervalMs",
+	"retention.cleanup_interval_ms": "retentionCleanupIntervalMs",
 	"payments.rpc_health_interval_ms": "rpcHealthIntervalMs",
 	"payments.reorg_monitor_ms": "reorgMonitorMs",
 	"retention.audit_ms": "retentionAuditMs",

@@ -132,7 +132,7 @@ describe("Webhook queue consumer on D1", () => {
 				.bind(now, now),
 			db
 				.prepare(
-					"INSERT INTO webhook_attempts (id, delivery_id, attempt, request_id, response_status, duration_ms, error_code, response_excerpt, request_snapshot, attempted_at) VALUES ('attempt-details-1', 'delivery-details', 1, 'request-1', 500, 10, 'http_error', '{}', NULL, ?), ('attempt-details-2', 'delivery-details', 2, 'request-2', 500, 20, 'http_error', '{}', 'not-json', ?), ('attempt-details-3', 'delivery-details', 3, 'request-3', 204, 30, NULL, NULL, ?, ?)",
+					"INSERT INTO webhook_attempts (id, delivery_id, attempt, request_id, response_status, duration_ms, error_code, diagnostic_detail, response_excerpt, request_snapshot, attempted_at) VALUES ('attempt-details-1', 'delivery-details', 1, 'request-1', 500, 10, 'http_error', 'Callback server rejected the request.', '{}', NULL, ?), ('attempt-details-2', 'delivery-details', 2, 'request-2', 500, 20, 'http_error', NULL, '{}', 'not-json', ?), ('attempt-details-3', 'delivery-details', 3, 'request-3', 204, 30, NULL, NULL, NULL, ?, ?)",
 				)
 				.bind(now, now + 1, validSnapshot, now + 2),
 		]);
@@ -154,6 +154,9 @@ describe("Webhook queue consumer on D1", () => {
 		});
 		expect(details.attempts[1]?.requestSnapshot).toBeNull();
 		expect(details.attempts[2]?.requestSnapshot).toBeNull();
+		expect(details.attempts[2]?.diagnosticDetail).toBe(
+			"Callback server rejected the request.",
+		);
 	});
 
 	it("resolves GMPay order context and delivers a signed integer-status callback", async () => {
@@ -346,6 +349,33 @@ describe("Webhook queue consumer on D1", () => {
 		});
 	});
 
+	it("records a new attempt when a dead delivery is manually requeued", async () => {
+		await expect(
+			claimManualWebhookRetry(db, "delivery-dead", -808),
+		).resolves.toBe(true);
+		await completeManualWebhookRetry(db, "delivery-dead", -808);
+		const retried = fakeMessage("delivery-dead", 1);
+		await processWebhookMessage(
+			db,
+			retried.message,
+			vi.fn().mockResolvedValue(new Response("ok", { status: 200 })),
+		);
+		await expect(delivery(db, "delivery-dead")).resolves.toMatchObject({
+			status: "succeeded",
+			attempt_count: 1,
+		});
+		const attempts = await db
+			.prepare(
+				"SELECT attempt, request_id FROM webhook_attempts WHERE delivery_id = ? ORDER BY attempted_at",
+			)
+			.bind("delivery-dead")
+			.all<{ attempt: number; request_id: string }>();
+		expect(attempts.results).toEqual([
+			{ attempt: 8, request_id: "request-delivery-dead-8" },
+			{ attempt: 1, request_id: "request-delivery-dead-1" },
+		]);
+	});
+
 	it("uses the configured maximum attempt count", async () => {
 		await db
 			.prepare(
@@ -536,11 +566,122 @@ describe("Webhook queue consumer on D1", () => {
 		});
 		const attempt = await db
 			.prepare(
-				"SELECT request_snapshot FROM webhook_attempts WHERE delivery_id = ?",
+				"SELECT error_code, diagnostic_detail, request_snapshot FROM webhook_attempts WHERE delivery_id = ?",
 			)
 			.bind("delivery-unsafe")
-			.first<{ request_snapshot: string | null }>();
+			.first<{
+				error_code: string | null;
+				diagnostic_detail: string | null;
+				request_snapshot: string | null;
+			}>();
+		expect(attempt).toMatchObject({
+			error_code: "webhook_url_unsafe",
+			diagnostic_detail: expect.stringContaining("HTTPS"),
+		});
 		expect(attempt?.request_snapshot).toBeNull();
+	});
+
+	it("classifies DNS, signing, and event data failures before delivery", async () => {
+		const fetcher = vi.fn<typeof fetch>();
+		await db
+			.prepare(
+				"UPDATE webhook_deliveries SET status = 'queued', attempt_count = 1, completed_at = NULL WHERE id = 'delivery-gmpay'",
+			)
+			.run();
+		const dns = fakeMessage("delivery-gmpay", 2);
+		await expect(
+			processWebhookMessage(db, dns.message, fetcher, undefined, {
+				resolveHostname: vi
+					.fn()
+					.mockRejectedValue(new Error("DNS provider error")),
+			}),
+		).resolves.toMatchObject({ errorCode: "webhook_dns_resolution_failed" });
+		expect(fetcher).not.toHaveBeenCalled();
+
+		await db
+			.prepare(
+				"UPDATE webhook_deliveries SET status = 'queued', attempt_count = 2 WHERE id = 'delivery-gmpay'",
+			)
+			.run();
+		await db
+			.prepare(
+				"UPDATE system_settings SET value = ? WHERE key = 'runtime.api_key_pepper'",
+			)
+			.bind(JSON.stringify(""))
+			.run();
+		const unavailable = fakeMessage("delivery-gmpay", 3);
+		await expect(
+			processWebhookMessage(db, unavailable.message, fetcher),
+		).resolves.toMatchObject({
+			errorCode: "webhook_signing_secret_unavailable",
+		});
+
+		await db
+			.prepare(
+				"UPDATE webhook_deliveries SET status = 'queued', attempt_count = 3 WHERE id = 'delivery-gmpay'",
+			)
+			.run();
+		await db
+			.prepare(
+				"UPDATE system_settings SET value = ? WHERE key = 'runtime.api_key_pepper'",
+			)
+			.bind(JSON.stringify("test-api-pepper"))
+			.run();
+		await db
+			.prepare(
+				"UPDATE webhook_events SET payload = 'not-json' WHERE id = 'event-gmpay'",
+			)
+			.run();
+		const invalidPayload = fakeMessage("delivery-gmpay", 4);
+		await expect(
+			processWebhookMessage(db, invalidPayload.message, fetcher),
+		).resolves.toMatchObject({
+			errorCode: "webhook_event_payload_invalid",
+		});
+
+		await db
+			.prepare(
+				"UPDATE webhook_deliveries SET status = 'queued', attempt_count = 4 WHERE id = 'delivery-gmpay'",
+			)
+			.run();
+		await db
+			.prepare(
+				"UPDATE webhook_events SET payload = '{}' WHERE id = 'event-gmpay'",
+			)
+			.run();
+		await db
+			.prepare(
+				"UPDATE api_keys SET secret_encrypted = 'invalid' WHERE id = 'api-key'",
+			)
+			.run();
+		const decrypt = fakeMessage("delivery-gmpay", 5);
+		await expect(
+			processWebhookMessage(db, decrypt.message, fetcher),
+		).resolves.toMatchObject({
+			errorCode: "webhook_signing_secret_decryption_failed",
+		});
+
+		const attempts = await db
+			.prepare(
+				"SELECT attempt, error_code, diagnostic_detail, request_snapshot FROM webhook_attempts WHERE delivery_id = ? AND attempt >= 2 ORDER BY attempt",
+			)
+			.bind("delivery-gmpay")
+			.all<{
+				attempt: number;
+				error_code: string;
+				diagnostic_detail: string;
+				request_snapshot: string | null;
+			}>();
+		expect(attempts.results.map((attempt) => attempt.error_code)).toEqual([
+			"webhook_dns_resolution_failed",
+			"webhook_signing_secret_unavailable",
+			"webhook_event_payload_invalid",
+			"webhook_signing_secret_decryption_failed",
+		]);
+		for (const attempt of attempts.results) {
+			expect(attempt.diagnostic_detail).toBeTruthy();
+			expect(attempt.request_snapshot).toBeNull();
+		}
 	});
 });
 

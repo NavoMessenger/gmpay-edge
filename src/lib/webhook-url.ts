@@ -54,15 +54,29 @@ const dnsResponseSchema = z.object({
 
 export type WebhookHostnameResolver = (hostname: string) => Promise<string[]>;
 
+export type ResolvedWebhookUrlSafety =
+	| "safe"
+	| "dns_resolution_failed"
+	| "unsafe";
+
+export async function classifyResolvedWebhookUrl(
+	value: string,
+	resolveHostname: WebhookHostnameResolver,
+): Promise<ResolvedWebhookUrlSafety> {
+	if (!isSafeWebhookUrl(value)) return "unsafe";
+	const hostname = new URL(value).hostname.replace(/^\[|\]$/g, "");
+	if (isIpAddress(hostname))
+		return isPublicIpAddress(hostname) ? "safe" : "unsafe";
+	const addresses = await resolveHostname(hostname);
+	if (addresses.length === 0) return "dns_resolution_failed";
+	return addresses.every(isPublicIpAddress) ? "safe" : "unsafe";
+}
+
 export async function assertSafeResolvedWebhookUrl(
 	value: string,
 	resolveHostname: WebhookHostnameResolver,
 ) {
-	if (!isSafeWebhookUrl(value)) return false;
-	const hostname = new URL(value).hostname.replace(/^\[|\]$/g, "");
-	if (isIpAddress(hostname)) return isPublicIpAddress(hostname);
-	const addresses = await resolveHostname(hostname);
-	return addresses.length > 0 && addresses.every(isPublicIpAddress);
+	return (await classifyResolvedWebhookUrl(value, resolveHostname)) === "safe";
 }
 
 export async function resolveWebhookHostname(

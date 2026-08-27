@@ -17,6 +17,7 @@ import { DomainError } from "#/lib/domain-error";
 import { redactedAuditJson } from "#/server/audit-redaction";
 import { getCloudflareEnv } from "#/server/db.server";
 import { loadOperationalSettings } from "#/server/operational-settings";
+import { saveSystemSettings } from "#/features/settings/server/system-settings";
 
 const auditQuery = z.object({
 	page: z.number().int().min(1).default(1),
@@ -133,7 +134,7 @@ export const getOperationsOverviewFn = createServerFn({
 	method: "GET",
 }).handler(async () => {
 	const { db } = await adminContext(systemPermission("operations", "read"));
-	const [taskRuns, cryptoRates, fiatRates] = await Promise.all([
+	const [taskRuns, cryptoRates, fiatRates, settings] = await Promise.all([
 		db
 			.prepare(
 				`SELECT id, task, trigger, schedule, status, started_at, completed_at,
@@ -157,11 +158,16 @@ export const getOperationsOverviewFn = createServerFn({
 			}>(),
 		loadRateSyncConfiguration(db, "crypto"),
 		loadRateSyncConfiguration(db, "fiat"),
+		loadOperationalSettings(db),
 	]);
 	return {
 		rateIntervals: {
 			crypto: cryptoRates.intervalMs,
 			fiat: fiatRates.intervalMs,
+			rpcHealth: settings.rpcHealthIntervalMs,
+			cleanup: settings.retentionCleanupIntervalMs,
+			scan: settings.paymentScanIntervalMs,
+			webhookRecovery: settings.webhookRecoveryIntervalMs,
 		},
 		taskRuns: taskRuns.results.map((run) => ({
 			invocationId: run.id,
@@ -190,6 +196,34 @@ export const runOperationsTaskFn = createServerFn({ method: "POST" })
 		return runOperationsTask(env as Env, {
 			task: data.task,
 			actorUserId: user.id,
+			requestId: request.headers.get("x-request-id"),
+			ipAddress: request.headers.get("cf-connecting-ip"),
+		});
+	});
+
+const scheduleSettingKeys = [
+	"payments.scan_interval_ms",
+	"payments.webhook_recovery_interval_ms",
+	"payments.rpc_health_interval_ms",
+	"retention.cleanup_interval_ms",
+] as const;
+
+export const updateOperationScheduleFn = createServerFn({ method: "POST" })
+	.validator((input: { key: string; intervalMs: number }) =>
+		z
+			.object({
+				key: z.enum(scheduleSettingKeys),
+				intervalMs: z.number().int(),
+			})
+			.parse(input),
+	)
+	.handler(async ({ data }) => {
+		const { db, user, request } = await adminContext(
+			systemPermission("operations", "update"),
+		);
+		return saveSystemSettings([{ key: data.key, value: data.intervalMs }], {
+			db,
+			userId: user.id,
 			requestId: request.headers.get("x-request-id"),
 			ipAddress: request.headers.get("cf-connecting-ip"),
 		});

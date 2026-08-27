@@ -5,6 +5,7 @@ import {
 	retryDelayMs,
 } from "#/features/webhooks/server/delivery";
 import {
+	type WebhookJsonObject,
 	type WebhookQueueMessage,
 	webhookJsonObjectSchema,
 } from "#/features/webhooks/types";
@@ -12,7 +13,7 @@ import { unitsToDecimal } from "#/lib/money";
 import { decryptSecret } from "#/lib/secrets";
 import { minorToDecimal } from "#/lib/units";
 import {
-	assertSafeResolvedWebhookUrl,
+	classifyResolvedWebhookUrl,
 	isSafeWebhookUrl,
 	resolveWebhookHostname,
 	type WebhookHostnameResolver,
@@ -101,23 +102,16 @@ export async function processWebhookMessage(
 		const resolveHostname =
 			context.resolveHostname ??
 			(fetcher === fetch ? resolveWebhookHostname : undefined);
-		if (
-			resolveHostname &&
-			!(await assertSafeResolvedWebhookUrl(delivery.url, resolveHostname))
-		)
-			throw new Error("Webhook delivery hostname did not resolve publicly");
+		if (resolveHostname)
+			await assertSafeWebhookDeliveryHostname(delivery.url, resolveHostname);
 		result = await deliverWebhook(delivery, fetcher, settings.webhookTimeoutMs);
-	} catch {
-		result = {
-			success: false as const,
-			durationMs: Date.now() - startedAt,
-			errorCode: "configuration_error",
-		};
+	} catch (error) {
+		result = preflightFailureResult(error, startedAt);
 	}
 	const now = Date.now();
 	await db
 		.prepare(
-			"INSERT OR IGNORE INTO webhook_attempts (id, delivery_id, attempt, request_id, response_status, duration_ms, error_code, response_excerpt, request_snapshot, attempted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"INSERT OR IGNORE INTO webhook_attempts (id, delivery_id, attempt, request_id, response_status, duration_ms, error_code, diagnostic_detail, response_excerpt, request_snapshot, attempted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		)
 		.bind(
 			crypto.randomUUID(),
@@ -127,6 +121,7 @@ export async function processWebhookMessage(
 			result.status ?? null,
 			result.durationMs,
 			result.errorCode ?? null,
+			result.diagnosticDetail ?? null,
 			redactResponseExcerpt(result.responseExcerpt),
 			result.requestSnapshot ? JSON.stringify(result.requestSnapshot) : null,
 			now,
@@ -192,6 +187,59 @@ export async function processWebhookMessage(
 	return result;
 }
 
+const webhookPreflightDiagnostics = {
+	webhook_dns_resolution_failed:
+		"无法解析回调域名的公网 DNS 记录，请检查域名解析后重试。",
+	webhook_url_unsafe:
+		"回调地址必须是可公开访问的 HTTPS 地址，且不能指向私有或保留网络。",
+	webhook_signing_secret_unavailable:
+		"回调签名密钥不可用，请检查运行时密钥配置和 API 密钥记录。",
+	webhook_signing_secret_decryption_failed:
+		"无法解密回调签名密钥，请检查密钥轮换或运行时加密配置。",
+	webhook_event_payload_invalid: "回调事件数据无效，无法生成发送内容。",
+	webhook_configuration_invalid: "回调投递配置不完整，无法生成发送请求。",
+} as const;
+
+type WebhookPreflightErrorCode = keyof typeof webhookPreflightDiagnostics;
+
+class WebhookPreflightError extends Error {
+	constructor(readonly code: WebhookPreflightErrorCode) {
+		super(code);
+	}
+}
+
+function failWebhookPreflight(code: WebhookPreflightErrorCode): never {
+	throw new WebhookPreflightError(code);
+}
+
+function preflightFailureResult(error: unknown, startedAt: number) {
+	const errorCode =
+		error instanceof WebhookPreflightError
+			? error.code
+			: "webhook_configuration_invalid";
+	return {
+		success: false as const,
+		durationMs: Date.now() - startedAt,
+		errorCode,
+		diagnosticDetail: webhookPreflightDiagnostics[errorCode],
+	};
+}
+
+async function assertSafeWebhookDeliveryHostname(
+	url: string,
+	resolveHostname: WebhookHostnameResolver,
+) {
+	let safety: Awaited<ReturnType<typeof classifyResolvedWebhookUrl>>;
+	try {
+		safety = await classifyResolvedWebhookUrl(url, resolveHostname);
+	} catch {
+		failWebhookPreflight("webhook_dns_resolution_failed");
+	}
+	if (safety === "dns_resolution_failed")
+		failWebhookPreflight("webhook_dns_resolution_failed");
+	if (safety === "unsafe") failWebhookPreflight("webhook_url_unsafe");
+}
+
 export function redactResponseExcerpt(value: string | undefined) {
 	if (!value) return null;
 	try {
@@ -241,17 +289,25 @@ async function resolveWebhookDelivery(
 			receive_address: string;
 			token: string;
 		}>();
-	if (!row) throw new Error("Webhook delivery configuration not found");
-	if (!row.api_protocol)
-		throw new Error("Webhook delivery protocol is unavailable");
+	if (!row) failWebhookPreflight("webhook_configuration_invalid");
+	if (!row.api_protocol) failWebhookPreflight("webhook_configuration_invalid");
 	// Validate again at delivery time so a compromised stored row cannot turn the
 	// queue worker into an SSRF proxy.
-	if (!isSafeWebhookUrl(row.url))
-		throw new Error("Webhook delivery URL is not a public HTTPS endpoint");
-	const runtime = sharedRuntime ?? (await loadRuntimeConfig(db));
+	if (!isSafeWebhookUrl(row.url)) failWebhookPreflight("webhook_url_unsafe");
+	let runtime: RuntimeConfig;
+	try {
+		runtime = sharedRuntime ?? (await loadRuntimeConfig(db));
+	} catch {
+		failWebhookPreflight("webhook_signing_secret_unavailable");
+	}
 	if (!runtime.apiKeyPepper)
-		throw new Error("Webhook signing secret is unavailable");
-	const payload = webhookJsonObjectSchema.parse(JSON.parse(row.payload));
+		failWebhookPreflight("webhook_signing_secret_unavailable");
+	let payload: WebhookJsonObject;
+	try {
+		payload = webhookJsonObjectSchema.parse(JSON.parse(row.payload));
+	} catch {
+		failWebhookPreflight("webhook_event_payload_invalid");
+	}
 	const transaction = webhookJsonObjectSchema.safeParse(payload.transaction);
 	const metadata = parseMetadata(row.metadata);
 	const amount = minorToDecimal(row.amount_minor, row.currency_decimals);
@@ -259,10 +315,16 @@ async function resolveWebhookDelivery(
 		row.expected_amount_units !== null && row.decimals !== null
 			? unitsToDecimal(BigInt(row.expected_amount_units), row.decimals)
 			: "0";
+	let secret: string;
+	try {
+		secret = await decryptSecret(row.secret_encrypted, runtime.apiKeyPepper);
+	} catch {
+		failWebhookPreflight("webhook_signing_secret_decryption_failed");
+	}
 	const base = {
 		...message,
 		url: row.url,
-		secret: await decryptSecret(row.secret_encrypted, runtime.apiKeyPepper),
+		secret,
 		payload,
 	};
 	if (row.api_protocol === "gmpay")

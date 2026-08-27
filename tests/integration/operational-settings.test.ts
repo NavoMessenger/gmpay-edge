@@ -79,6 +79,7 @@ describe("authoritative operational settings", () => {
 			webhookTimeoutMs: 10_000,
 			paymentScanBatchSize: 25,
 			webhookRecoveryIntervalMs: 900_000,
+			retentionCleanupIntervalMs: 86_400_000,
 			rpcHealthIntervalMs: 3_600_000,
 		});
 	});

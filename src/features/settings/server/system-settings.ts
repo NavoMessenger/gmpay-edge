@@ -60,6 +60,11 @@ const definitions = {
 		.int()
 		.min(60_000)
 		.max(3_600_000),
+	"retention.cleanup_interval_ms": z
+		.number()
+		.int()
+		.min(3_600_000)
+		.max(604_800_000),
 	"payments.rpc_health_interval_ms": z
 		.number()
 		.int()
@@ -98,6 +103,7 @@ const defaults: Record<SettingKey, SettingValue> = {
 	"payments.scan_batch_size": 100,
 	"payments.scan_interval_ms": 60_000,
 	"payments.webhook_recovery_interval_ms": 15 * 60_000,
+	"retention.cleanup_interval_ms": 86_400_000,
 	"payments.rpc_health_interval_ms": 60 * 60_000,
 	"payments.reorg_monitor_ms": 86_400_000,
 	"retention.audit_ms": 31_536_000_000,

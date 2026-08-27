@@ -430,13 +430,13 @@ export async function updateConnectionHealth(
 ) {
 	await db
 		.prepare(
-			`UPDATE payment_ingresses SET health_status = ?, last_checked_at = ?,
+			`UPDATE payment_ingresses SET health_status = ?,
 				 last_error_code = ?, updated_at = ? WHERE id = ?
 				 AND EXISTS (
 				  SELECT 1 FROM payment_rails rail
 				  WHERE rail.code = payment_ingresses.rail_code AND rail.kind = 'chain'
 				 )`,
 		)
-		.bind(status, Date.now(), errorCode, Date.now(), connectionId)
+		.bind(status, errorCode, Date.now(), connectionId)
 		.run();
 }

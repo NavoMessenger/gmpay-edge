@@ -228,6 +228,7 @@ export const webhookAttempts = sqliteTable(
 		responseStatus: integer("response_status"),
 		durationMs: integer("duration_ms"),
 		errorCode: text("error_code"),
+		diagnosticDetail: text("diagnostic_detail"),
 		responseExcerpt: text("response_excerpt"),
 		requestSnapshot: text("request_snapshot", {
 			mode: "json",
@@ -235,9 +236,10 @@ export const webhookAttempts = sqliteTable(
 		attemptedAt: integer("attempted_at", { mode: "timestamp_ms" }).notNull(),
 	},
 	(table) => [
-		uniqueIndex("webhook_attempts_delivery_attempt_uidx").on(
+		uniqueIndex("webhook_attempts_delivery_attempt_request_uidx").on(
 			table.deliveryId,
 			table.attempt,
+			table.requestId,
 		),
 		index("webhook_attempts_retention_idx").on(table.attemptedAt, table.id),
 	],

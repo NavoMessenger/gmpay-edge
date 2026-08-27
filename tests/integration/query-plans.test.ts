@@ -597,7 +597,7 @@ describe("hot list query plans", () => {
 		);
 
 		expect(details).toContain(
-			"webhook_attempts_delivery_attempt_uidx (delivery_id=?)",
+			"webhook_attempts_delivery_attempt_request_uidx (delivery_id=?)",
 		);
 		expect(details).not.toContain("USE TEMP B-TREE FOR ORDER BY");
 	});
