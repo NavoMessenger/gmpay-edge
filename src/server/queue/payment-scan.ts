@@ -118,10 +118,9 @@ export async function handlePaymentScan(
 					failoverCount,
 				});
 			if (candidate.connectionId)
-				await updateConnectionHealth(
+				await recordPaymentScanObservation(
 					env.DB,
 					candidate.connectionId,
-					"unhealthy",
 					kind,
 				);
 			if (!retryable) {
@@ -132,12 +131,7 @@ export async function handlePaymentScan(
 			continue;
 		}
 		if (candidate.connectionId)
-			await updateConnectionHealth(
-				env.DB,
-				candidate.connectionId,
-				"healthy",
-				null,
-			);
+			await recordPaymentScanObservation(env.DB, candidate.connectionId, null);
 		await processScannedTransactions(
 			env,
 			message.body.orderId,
@@ -190,10 +184,9 @@ export async function scanTransactions(
 			.then(() => undefined)
 			.catch(async (error: unknown) => {
 				if (subscription)
-					await updateConnectionHealth(
+					await recordPaymentScanObservation(
 						db,
 						subscription.connectionId,
-						"unhealthy",
 						subscriptionAdapter.classifyError(error),
 					);
 				// Subscription transport is an optimization. The HTTP poll below
@@ -422,21 +415,20 @@ async function recordPaymentScanIssue(
 		.run();
 }
 
-export async function updateConnectionHealth(
+export async function recordPaymentScanObservation(
 	db: D1Database,
 	connectionId: string,
-	status: "healthy" | "unhealthy",
 	errorCode: string | null,
 ) {
 	await db
 		.prepare(
-			`UPDATE payment_ingresses SET health_status = ?,
-				 last_error_code = ?, updated_at = ? WHERE id = ?
+			`UPDATE payment_ingresses SET last_payment_scan_at = ?,
+				 last_payment_scan_error_code = ?, updated_at = ? WHERE id = ?
 				 AND EXISTS (
 				  SELECT 1 FROM payment_rails rail
 				  WHERE rail.code = payment_ingresses.rail_code AND rail.kind = 'chain'
 				 )`,
 		)
-		.bind(status, errorCode, Date.now(), connectionId)
+		.bind(Date.now(), errorCode, Date.now(), connectionId)
 		.run();
 }

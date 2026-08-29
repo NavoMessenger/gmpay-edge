@@ -8,7 +8,7 @@ import {
 } from "#/features/status/server/health";
 import { applySecurityHeaders } from "#/server/http-security";
 import { validateRequestAuthority } from "#/server/middleware/authority";
-import { updateConnectionHealth } from "#/server/queue/payment-scan";
+import { recordPaymentScanObservation } from "#/server/queue/payment-scan";
 import {
 	createDatastoreCounters,
 	instrumentD1,
@@ -264,46 +264,62 @@ describe("public health receiving-method readiness", () => {
 		expect(bindingReads).toBe(2);
 	});
 
-	it("does not write chain health state for provider scan outcomes", async () => {
-		await updateConnectionHealth(
-			db,
-			"connection-okpay",
-			"unhealthy",
-			"network",
-		);
+	it("does not record chain scan observations for provider outcomes", async () => {
+		await recordPaymentScanObservation(db, "connection-okpay", "network");
 		const connection = await db
 			.prepare(
-				"SELECT health_status, last_error_code FROM payment_ingresses WHERE id = ?",
+				"SELECT health_status, last_payment_scan_at, last_payment_scan_error_code FROM payment_ingresses WHERE id = ?",
 			)
 			.bind("connection-okpay")
-			.first<{ health_status: string; last_error_code: string | null }>();
+			.first<{
+				health_status: string;
+				last_payment_scan_at: number | null;
+				last_payment_scan_error_code: string | null;
+			}>();
 		expect(connection).toEqual({
 			health_status: "unknown",
-			last_error_code: null,
+			last_payment_scan_at: null,
+			last_payment_scan_error_code: null,
 		});
 	});
 
-	it("does not treat payment scans as scheduled health checks", async () => {
-		await updateConnectionHealth(
-			db,
-			"connection-chain",
-			"unhealthy",
-			"network",
-		);
+	it("records scan observations without changing scheduled health state", async () => {
+		await recordPaymentScanObservation(db, "connection-chain", "network");
 		const connection = await db
 			.prepare(
-				"SELECT health_status, last_checked_at, last_error_code FROM payment_ingresses WHERE id = ?",
+				"SELECT health_status, last_checked_at, last_error_code, consecutive_health_failures, last_payment_scan_at, last_payment_scan_error_code FROM payment_ingresses WHERE id = ?",
 			)
 			.bind("connection-chain")
 			.first<{
 				health_status: string;
 				last_checked_at: number | null;
 				last_error_code: string | null;
+				consecutive_health_failures: number;
+				last_payment_scan_at: number | null;
+				last_payment_scan_error_code: string | null;
 			}>();
 		expect(connection).toEqual({
-			health_status: "unhealthy",
+			health_status: "healthy",
 			last_checked_at: 123,
-			last_error_code: "network",
+			last_error_code: null,
+			consecutive_health_failures: 0,
+			last_payment_scan_at: expect.any(Number),
+			last_payment_scan_error_code: "network",
+		});
+
+		await recordPaymentScanObservation(db, "connection-chain", null);
+		expect(
+			await db
+				.prepare(
+					"SELECT health_status, last_checked_at, consecutive_health_failures, last_payment_scan_error_code FROM payment_ingresses WHERE id = ?",
+				)
+				.bind("connection-chain")
+				.first(),
+		).toEqual({
+			health_status: "healthy",
+			last_checked_at: 123,
+			consecutive_health_failures: 0,
+			last_payment_scan_error_code: null,
 		});
 	});
 });

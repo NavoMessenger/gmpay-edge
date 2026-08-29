@@ -57,6 +57,7 @@ import {
 } from "#/features/webhooks/server/payment-event-sources";
 import { useNavigation } from "#/layouts/components/navigation-context";
 import { PageHeader } from "#/layouts/components/page-header";
+import { formatDateTime } from "#/lib/format";
 import { useCurrentProTableUrlState } from "#/lib/pro-table-url-state";
 import { m } from "#/paraglide/messages";
 
@@ -210,18 +211,41 @@ export function PaymentIngressesPage() {
 		{
 			accessorKey: "health_status",
 			header: m.infrastructure_health(),
-			cell: ({ row }) =>
-				row.original.kind === "chain" ? (
-					<Badge
-						variant={
-							row.original.health_status === "healthy" ? "default" : "secondary"
-						}
-					>
-						{healthStatusLabel(row.original.health_status)}
-					</Badge>
-				) : (
-					<span className="text-muted-foreground">—</span>
-				),
+			cell: ({ row }) => {
+				if (row.original.kind !== "chain")
+					return <span className="text-muted-foreground">—</span>;
+				const healthCheckedAt = row.original.last_checked_at
+					? formatDateTime(row.original.last_checked_at)
+					: "—";
+				const scanObservedAt = row.original.last_payment_scan_at
+					? formatDateTime(row.original.last_payment_scan_at)
+					: "—";
+				return (
+					<div className="grid gap-1">
+						<Badge
+							className="w-fit"
+							variant={
+								row.original.health_status === "healthy"
+									? "default"
+									: "secondary"
+							}
+						>
+							{healthStatusLabel(row.original.health_status)}
+						</Badge>
+						<span className="text-muted-foreground text-xs">
+							{m.infrastructure_last_health_check({ time: healthCheckedAt })}
+						</span>
+						<span className="text-muted-foreground text-xs">
+							{row.original.last_payment_scan_error_code
+								? m.infrastructure_last_payment_scan_error({
+										time: scanObservedAt,
+										code: row.original.last_payment_scan_error_code,
+									})
+								: m.infrastructure_last_payment_scan({ time: scanObservedAt })}
+						</span>
+					</div>
+				);
+			},
 		},
 		{
 			id: "actions",

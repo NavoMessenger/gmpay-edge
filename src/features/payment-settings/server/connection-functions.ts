@@ -32,6 +32,8 @@ type PaymentIngressRow = {
 	last_latency_ms: number | null;
 	last_checked_at: number | null;
 	last_error_code: string | null;
+	last_payment_scan_at: number | null;
+	last_payment_scan_error_code: string | null;
 	timeout_ms: number | null;
 	block_lookback: number | null;
 	log_block_range: number | null;
@@ -58,6 +60,7 @@ export const getPaymentIngressesPageFn = createServerFn({
 				 pc.type, pc.transport, COALESCE(pc.endpoint, pc.external_source_id) AS endpoint,
 				 pc.priority, pc.enabled, pc.health_status,
 				 pc.last_latency_ms, pc.last_checked_at, pc.last_error_code,
+				 pc.last_payment_scan_at, pc.last_payment_scan_error_code,
 				 pc.timeout_ms, pc.block_lookback, pc.log_block_range, pc.max_scan_transactions,
 				 pc.external_source_id, pc.mode,
 				 CASE WHEN credential.payment_ingress_id IS NOT NULL

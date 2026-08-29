@@ -96,6 +96,12 @@ export const paymentIngresses = sqliteTable(
 		lastLatencyMs: integer("last_latency_ms"),
 		lastCheckedAt: integer("last_checked_at", { mode: "timestamp_ms" }),
 		lastErrorCode: text("last_error_code"),
+		// Payment scans run frequently to find incoming transactions. Their
+		// availability observations must not be mistaken for health checks.
+		lastPaymentScanAt: integer("last_payment_scan_at", {
+			mode: "timestamp_ms",
+		}),
+		lastPaymentScanErrorCode: text("last_payment_scan_error_code"),
 		consecutiveHealthFailures: integer("consecutive_health_failures")
 			.notNull()
 			.default(0),
