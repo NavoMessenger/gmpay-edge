@@ -118,16 +118,24 @@ async function createOrderRecord(
 		)
 		.bind(input.paymentAsset, input.paymentNetwork)
 		.all<{ id: string }>();
-	for (const method of methods.results) {
-		const readiness = await checkReceivingMethodReadiness(db, method.id);
-		if (readiness.ready)
-			return createOrderFromReceivingMethod(
-				db,
-				{ ...input, receivingMethodId: method.id },
-				requestUrl,
-				context,
-			);
-	}
+	// Readiness checks are independent. Running them concurrently avoids a
+	// serial D1 round-trip for every configured receiving method while keeping
+	// the same strict readiness and target validation rules.
+	const readinessResults = await Promise.all(
+		methods.results.map(async (method) => ({
+			method,
+			readiness: await checkReceivingMethodReadiness(db, method.id),
+		})),
+	);
+	const readyMethod = readinessResults.find(({ readiness }) => readiness.ready);
+	if (readyMethod)
+		return createOrderFromReceivingMethod(
+			db,
+			{ ...input, receivingMethodId: readyMethod.method.id },
+			requestUrl,
+			context,
+			readyMethod.readiness,
+		);
 	if (methods.results.length === 0)
 		throw new OrderServiceError(
 			"receiving_method_not_found",
@@ -146,29 +154,25 @@ async function createOrderFromReceivingMethod(
 	input: CreateOrderInput,
 	requestUrl: string,
 	context: OrderCreationContext = {},
+	prevalidatedReadiness?: Awaited<ReturnType<typeof checkReceivingMethodReadiness>>,
 ): Promise<ApiOrder> {
 	const methodId = input.receivingMethodId;
 	if (!methodId) throw new Error("Receiving method is required");
-	const readiness = await checkReceivingMethodReadiness(db, methodId);
-	if (!readiness.ready)
-		throw new OrderServiceError(
-			"receiving_method_not_ready",
-			readiness.reasons[0]?.message ?? "Receiving method is not ready",
-			422,
-		);
-	const methods = await db
-		.prepare(
-			`SELECT rm.id, rm.target_value, rm.min_amount_minor, rm.max_amount_minor,
-			 pa.id AS payment_method_id,
-			 pa.code, pa.decimals,
-			 pa.rail_code
+	const [readiness, methods] = await Promise.all([
+		prevalidatedReadiness ?? checkReceivingMethodReadiness(db, methodId),
+		db
+			.prepare(
+				`SELECT rm.id, rm.target_value, rm.min_amount_minor, rm.max_amount_minor,
+				 pa.id AS payment_method_id,
+				 pa.code, pa.decimals,
+				 pa.rail_code
 			 FROM receiving_methods rm
 			 JOIN receiving_method_assets link ON link.receiving_method_id = rm.id
 			 JOIN payment_assets pa ON pa.id = link.payment_asset_id
 			 WHERE rm.id = ? ORDER BY pa.code`,
-		)
-		.bind(methodId)
-		.all<{
+			)
+			.bind(methodId)
+			.all<{
 			id: string;
 			target_value: string;
 			min_amount_minor: string | null;
@@ -177,7 +181,14 @@ async function createOrderFromReceivingMethod(
 			code: string;
 			decimals: number;
 			rail_code: string;
-		}>();
+			}>(),
+	]);
+	if (!readiness.ready)
+		throw new OrderServiceError(
+			"receiving_method_not_ready",
+			readiness.reasons[0]?.message ?? "Receiving method is not ready",
+			422,
+		);
 	const method =
 		input.paymentAsset || input.paymentNetwork
 			? methods.results.find(

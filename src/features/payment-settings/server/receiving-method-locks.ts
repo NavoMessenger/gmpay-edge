@@ -114,12 +114,14 @@ export async function allocateReceivingMethodAndSnapshot(
 		input.expiresAt,
 		input.reusableAt ?? input.expiresAt + 24 * 3_600_000,
 	);
-	await releaseExpiredReceivingMethodLocks(
-		db,
-		now,
-		input.immediateReleaseMode ?? false,
-	);
-	await clearReusableReceivingMethodLockKeys(db, now);
+	await Promise.all([
+		releaseExpiredReceivingMethodLocks(
+			db,
+			now,
+			input.immediateReleaseMode ?? false,
+		),
+		clearReusableReceivingMethodLockKeys(db, now),
+	]);
 	const method = await db
 		.prepare(
 			`SELECT rm.id, rm.min_amount_minor, rm.max_amount_minor,
