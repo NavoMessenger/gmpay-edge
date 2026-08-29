@@ -114,20 +114,23 @@ async function authenticateParameters(
 		parameterValue(parameters, options.signatureField),
 	);
 	if (!(pid && signature)) return null;
-	const row = await db
-		.prepare(
-			`SELECT id, secret_encrypted, scopes, enabled, expires_at, revoked_at
+	const [row, runtime] = await Promise.all([
+		db
+			.prepare(
+				`SELECT id, secret_encrypted, scopes, enabled, expires_at, revoked_at
 			 FROM api_keys WHERE pid = ? LIMIT 1`,
-		)
-		.bind(pid)
-		.first<{
+			)
+			.bind(pid)
+			.first<{
 			id: string;
 			secret_encrypted: string;
 			scopes: string;
 			enabled: number;
 			expires_at: number | null;
 			revoked_at: number | null;
-		}>();
+			}>(),
+		loadRuntimeConfig(db),
+	]);
 	if (
 		!row ||
 		row.enabled !== 1 ||
@@ -138,7 +141,6 @@ async function authenticateParameters(
 	const scopes = parseApiScopes(row.scopes);
 	if (!scopes) return null;
 	if (!hasRequiredApiScope(scopes, requiredScope)) return null;
-	const runtime = await loadRuntimeConfig(db);
 	if (!runtime.apiKeyPepper) return null;
 	const secret = await decryptSecret(
 		row.secret_encrypted,

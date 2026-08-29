@@ -114,6 +114,7 @@ async function createOrderRecord(
 		input.paymentAsset,
 		input.paymentNetwork,
 		context.cache,
+		context.stage,
 	);
 	context.stage?.("candidate_query");
 	// Readiness checks are independent. Running them concurrently avoids a
@@ -156,7 +157,8 @@ async function loadPaymentRouteCandidates(
 	paymentAsset: string,
 	paymentNetwork: string,
 	cache?: RuntimeCache,
-) {
+	stage?: (stage: string) => void,
+): Promise<Array<{ id: string }>> {
 	const cacheKey = `payment-route:v1:${paymentNetwork}:${paymentAsset}`;
 	if (cache) {
 		try {
@@ -167,11 +169,14 @@ async function loadPaymentRouteCandidates(
 				parsed.length > 0 &&
 				parsed.every((id) => typeof id === "string" && id.length > 0)
 			)
-				return parsed.map((id) => ({ id }));
+				stage?.("route_cache_hit");
+				return (parsed as string[]).map((id) => ({ id }));
 		} catch {
+			stage?.("route_cache_fallback");
 			// KV is an optional routing optimisation; D1 remains authoritative.
 		}
 	}
+	stage?.("route_cache_miss");
 	const methods = await db
 		.prepare(
 			`SELECT rm.id FROM receiving_methods rm
@@ -188,11 +193,14 @@ async function loadPaymentRouteCandidates(
 		.bind(paymentAsset, paymentNetwork)
 		.all<{ id: string }>();
 	if (cache && methods.results.length) {
-		void cache
-			.put(cacheKey, JSON.stringify(methods.results.map(({ id }) => id)), {
+		try {
+			await cache.put(cacheKey, JSON.stringify(methods.results.map(({ id }) => id)), {
 				expirationTtl: paymentRouteCacheTtlSeconds,
-			})
-			.catch(() => undefined);
+			});
+			stage?.("route_cache_write");
+		} catch {
+			stage?.("route_cache_fallback");
+		}
 	}
 	return methods.results;
 }

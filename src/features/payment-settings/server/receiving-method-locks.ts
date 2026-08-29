@@ -20,6 +20,7 @@ export type PaymentAllocationInput = {
 	};
 	now?: number;
 	stage?: (stage: string) => void;
+	prepared?: PreparedReceivingMethodAllocation;
 	order?: {
 		externalOrderId: string;
 		amountMinor: string;
@@ -37,8 +38,25 @@ export type PaymentAllocationInput = {
 	};
 };
 
+type PreparedReceivingMethodAllocation = {
+	now: number;
+	reusableAt: number;
+	method: {
+		id: string;
+		min_amount_minor: string | null;
+		max_amount_minor: string | null;
+		target_value: string;
+		payment_method_id: string;
+		default_confirmations: number;
+		asset_id: string;
+		rail_code: string;
+		connection_id: string;
+	};
+};
+
 export class ReceivingMethodUnavailableError extends Error {
 	readonly code = "PAYMENT_TARGET_UNAVAILABLE";
+	prepared?: PreparedReceivingMethodAllocation;
 
 	constructor(
 		message = "The receiving method is already reserved for this amount",
@@ -76,6 +94,7 @@ export async function allocateUniqueReceivingMethodAndSnapshot(
 		maximumAttempts: _maximumAttempts,
 		...allocationInput
 	} = input;
+	let prepared: PreparedReceivingMethodAllocation | undefined;
 	for (let offset = 0; offset < maximumAttempts; offset++) {
 		const amountUnits =
 			quantized.amountUnits + BigInt(offset) * quantized.stepUnits;
@@ -84,12 +103,17 @@ export async function allocateUniqueReceivingMethodAndSnapshot(
 		try {
 			const allocated = await allocateReceivingMethodAndSnapshot(db, {
 				...allocationInput,
+				...(prepared ? { prepared } : {}),
 				expectedAmountUnits,
 				...(input.order ? { order: input.order } : {}),
 				...(input.existingOrder ? { existingOrder: input.existingOrder } : {}),
 			});
 			return { ...allocated, expectedAmountUnits, paymentAmount };
 		} catch (error) {
+			if (error instanceof ReceivingMethodUnavailableError && error.prepared) {
+				prepared = error.prepared;
+				input.stage?.("allocation_collision_retry");
+			}
 			if (
 				!(error instanceof ReceivingMethodUnavailableError) ||
 				error.reason !== "collision" ||
@@ -110,21 +134,22 @@ export async function allocateReceivingMethodAndSnapshot(
 	input: PaymentAllocationInput,
 ) {
 	parseAmountUnits(input.expectedAmountUnits);
-	const now = input.now ?? Date.now();
-	const reusableAt = Math.max(
+	const now = input.prepared?.now ?? input.now ?? Date.now();
+	const reusableAt = input.prepared?.reusableAt ?? Math.max(
 		input.expiresAt,
 		input.reusableAt ?? input.expiresAt + 24 * 3_600_000,
 	);
-	await Promise.all([
+	if (!input.prepared)
+		await Promise.all([
 		releaseExpiredReceivingMethodLocks(
 			db,
 			now,
 			input.immediateReleaseMode ?? false,
 		),
 		clearReusableReceivingMethodLockKeys(db, now),
-	]);
-	input.stage?.("lock_cleanup");
-	const method = await db
+		]);
+	if (!input.prepared) input.stage?.("lock_cleanup");
+	const method = input.prepared?.method ?? (await db
 		.prepare(
 			`SELECT rm.id, rm.min_amount_minor, rm.max_amount_minor,
 			 rm.target_value, asset.id AS payment_method_id,
@@ -150,8 +175,8 @@ export async function allocateReceivingMethodAndSnapshot(
 			asset_id: string;
 			rail_code: string;
 			connection_id: string;
-		}>();
-	input.stage?.("lock_method_lookup");
+		}>());
+	if (!input.prepared) input.stage?.("lock_method_lookup");
 	if (!method)
 		throw new ReceivingMethodUnavailableError(
 			"Receiving method is not ready",
@@ -337,7 +362,9 @@ export async function allocateReceivingMethodAndSnapshot(
 			.first<{ value: number }>();
 		if (existing) throw new PaymentOrderConflictError();
 	}
-	throw new ReceivingMethodUnavailableError();
+	const unavailable = new ReceivingMethodUnavailableError();
+	unavailable.prepared = { now, reusableAt, method };
+	throw unavailable;
 }
 
 export async function releaseReceivingMethodLock(
