@@ -69,7 +69,7 @@ const definitions = {
 		.number()
 		.int()
 		.min(60_000)
-		.max(3_600_000),
+		.max(604_800_000),
 	"payments.reorg_monitor_ms": z.number().int().min(3_600_000).max(604_800_000),
 	"retention.audit_ms": z
 		.number()

@@ -32,7 +32,7 @@ const operationalSettingsSchema = z.object({
 	paymentScanIntervalMs: z.number().int().min(15_000).max(3_600_000),
 	webhookRecoveryIntervalMs: z.number().int().min(60_000).max(3_600_000),
 	retentionCleanupIntervalMs: z.number().int().min(3_600_000).max(604_800_000),
-	rpcHealthIntervalMs: z.number().int().min(60_000).max(3_600_000),
+	rpcHealthIntervalMs: z.number().int().min(60_000).max(604_800_000),
 	reorgMonitorMs: z.number().int().min(3_600_000).max(604_800_000),
 	retentionAuditMs: z.number().int().min(2_592_000_000).max(315_360_000_000),
 });
@@ -52,6 +52,7 @@ const defaults: OperationalSettings = {
 	reorgMonitorMs: 86_400_000,
 	retentionAuditMs: 31_536_000_000,
 };
+
 
 const keys = {
 	"orders.immediate_release_mode": "immediateReleaseMode",
