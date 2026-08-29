@@ -21,6 +21,7 @@ async function createOrderAwaitingReceivingMethod(
 	requestUrl: string,
 	context: OrderCreationContext = {},
 ): Promise<ApiOrder> {
+	context.stage?.("settings");
 	const settings = await loadOperationalSettings(db);
 	const expiresInMs = resolveOrderExpiryMs(input.expiresInMs, settings);
 	const id = generateOrderId();
@@ -110,14 +111,19 @@ async function createOrderRecord(
 			`SELECT rm.id FROM receiving_methods rm
 			 JOIN receiving_method_assets link ON link.receiving_method_id = rm.id
 			 JOIN payment_assets pa ON pa.id = link.payment_asset_id
+			 JOIN payment_rails pr ON pr.code = pa.rail_code
 			 WHERE rm.enabled = 1
 			 AND rm.target_value != ''
 			 AND pa.code = ?
 			 AND pa.rail_code = ?
+			 AND EXISTS (SELECT 1 FROM payment_ingresses pc
+				WHERE pc.rail_code = pa.rail_code AND pc.enabled = 1
+				AND (pr.kind IN ('exchange', 'wallet') OR pc.health_status = 'healthy'))
 			 ORDER BY RANDOM()`,
 		)
 		.bind(input.paymentAsset, input.paymentNetwork)
 		.all<{ id: string }>();
+	context.stage?.("candidate_query");
 	// Readiness checks are independent. Running them concurrently avoids a
 	// serial D1 round-trip for every configured receiving method while keeping
 	// the same strict readiness and target validation rules.
@@ -127,6 +133,7 @@ async function createOrderRecord(
 			readiness: await checkReceivingMethodReadiness(db, method.id),
 		})),
 	);
+	context.stage?.("readiness");
 	const readyMethod = readinessResults.find(({ readiness }) => readiness.ready);
 	if (readyMethod)
 		return createOrderFromReceivingMethod(
@@ -183,6 +190,7 @@ async function createOrderFromReceivingMethod(
 			rail_code: string;
 			}>(),
 	]);
+	context.stage?.("method_details");
 	if (!readiness.ready)
 		throw new OrderServiceError(
 			"receiving_method_not_ready",
@@ -219,6 +227,7 @@ async function createOrderFromReceivingMethod(
 		paymentAsset: method.code,
 		assetDecimals: method.decimals,
 	});
+	context.stage?.("quote");
 	let paymentAmount =
 		exchangeRateQuote?.paymentAmount ??
 		(await quotePaymentAmount(db, paymentInput, method.decimals));
@@ -235,6 +244,7 @@ async function createOrderFromReceivingMethod(
 				})
 			: null;
 	const settings = await loadOperationalSettings(db);
+	context.stage?.("settings");
 	const expiresInMs = resolveOrderExpiryMs(input.expiresInMs, settings);
 	const now = Date.now();
 	const expiresAt = now + expiresInMs;
@@ -255,6 +265,7 @@ async function createOrderFromReceivingMethod(
 				: expiresAt + settings.reorgMonitorMs,
 			immediateReleaseMode: settings.immediateReleaseMode,
 			now,
+			stage: context.stage,
 			...(exchangeRateQuote
 				? {
 						rate: {
@@ -279,6 +290,7 @@ async function createOrderFromReceivingMethod(
 				...(input.metadata ? { metadata: input.metadata } : {}),
 			},
 		});
+		context.stage?.("allocation");
 		paymentAmount = allocation.paymentAmount;
 	} catch (error) {
 		if (error instanceof PaymentOrderConflictError)
@@ -330,6 +342,7 @@ function resolveOrderExpiryMs(
 export interface OrderCreationContext {
 	apiKeyId?: string;
 	apiProtocol?: "gmpay" | "epay";
+	stage?: (stage: string) => void;
 }
 
 async function quotePaymentAmount(

@@ -322,6 +322,13 @@ export async function handleGmpayCreateRequest(
 	create: OrderCreator = createOrder,
 ) {
 	const requestId = getRequestId(request);
+	const startedAt = Date.now();
+	const stage = (name: string) =>
+		console.info("gmpay_create_timing", {
+			requestId,
+			stage: name,
+			ms: Date.now() - startedAt,
+		});
 	try {
 		const parsed = parseGmpayCreateInput(
 			parseGmpayRequestBody(
@@ -329,12 +336,14 @@ export async function handleGmpayCreateRequest(
 				await readLimitedRequestText(request, merchantRequestBodyLimitBytes),
 			),
 		);
+		stage("parsed");
 		if (!parsed.success)
 			return gatewayResponse(
 				gmpayError(requestId, 10009, "invalid parameters"),
 				400,
 			);
 		const principal = await authenticateGmpayCreate(env.DB, parsed.data);
+		stage("authenticated");
 		if (!principal)
 			return gatewayResponse(
 				gmpayError(requestId, 401, "signature verification failed"),
@@ -347,8 +356,10 @@ export async function handleGmpayCreateRequest(
 			{
 				apiKeyId: principal.apiKeyId,
 				apiProtocol: "gmpay",
+				stage,
 			},
 		);
+		stage("created");
 		return gatewayResponse(gmpayCreateResponse(order, requestId), 200);
 	} catch (error) {
 		if (error instanceof RequestBodyTooLargeError)

@@ -19,6 +19,7 @@ export type PaymentAllocationInput = {
 		observedAt?: number;
 	};
 	now?: number;
+	stage?: (stage: string) => void;
 	order?: {
 		externalOrderId: string;
 		amountMinor: string;
@@ -122,6 +123,7 @@ export async function allocateReceivingMethodAndSnapshot(
 		),
 		clearReusableReceivingMethodLockKeys(db, now),
 	]);
+	input.stage?.("lock_cleanup");
 	const method = await db
 		.prepare(
 			`SELECT rm.id, rm.min_amount_minor, rm.max_amount_minor,
@@ -150,6 +152,7 @@ export async function allocateReceivingMethodAndSnapshot(
 			rail_code: string;
 			connection_id: string;
 		}>();
+	input.stage?.("lock_method_lookup");
 	if (!method)
 		throw new ReceivingMethodUnavailableError(
 			"Receiving method is not ready",
@@ -316,6 +319,7 @@ export async function allocateReceivingMethodAndSnapshot(
 				.bind(input.orderId, input.orderId),
 		);
 	const results = await db.batch(statements);
+	input.stage?.("lock_batch_write");
 	const orderChanged =
 		orderMutationIndex === undefined ||
 		(results[orderMutationIndex]?.meta.changes ?? 0) === 1;
