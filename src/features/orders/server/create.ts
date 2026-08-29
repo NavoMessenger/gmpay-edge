@@ -1,7 +1,7 @@
 import { generateOrderId } from "#/features/orders/order-id";
 import type { CreateOrderInput } from "#/features/orders/schema";
 import type { ApiOrder } from "#/features/orders/server/query";
-import { checkReceivingMethodReadiness } from "#/features/payment-settings/server/check-method-readiness";
+import { checkReceivingMethodOrderReadiness } from "#/features/payment-settings/server/check-method-readiness";
 import {
 	quoteUsdAmountMinor,
 	quoteWithExchangeRate,
@@ -111,14 +111,12 @@ async function createOrderRecord(
 			`SELECT rm.id FROM receiving_methods rm
 			 JOIN receiving_method_assets link ON link.receiving_method_id = rm.id
 			 JOIN payment_assets pa ON pa.id = link.payment_asset_id
-			 JOIN payment_rails pr ON pr.code = pa.rail_code
 			 WHERE rm.enabled = 1
 			 AND rm.target_value != ''
 			 AND pa.code = ?
 			 AND pa.rail_code = ?
 			 AND EXISTS (SELECT 1 FROM payment_ingresses pc
-				WHERE pc.rail_code = pa.rail_code AND pc.enabled = 1
-				AND (pr.kind IN ('exchange', 'wallet') OR pc.health_status = 'healthy'))
+				WHERE pc.rail_code = pa.rail_code AND pc.enabled = 1)
 			 ORDER BY RANDOM()`,
 		)
 		.bind(input.paymentAsset, input.paymentNetwork)
@@ -130,7 +128,7 @@ async function createOrderRecord(
 	const readinessResults = await Promise.all(
 		methods.results.map(async (method) => ({
 			method,
-			readiness: await checkReceivingMethodReadiness(db, method.id),
+			readiness: await checkReceivingMethodOrderReadiness(db, method.id),
 		})),
 	);
 	context.stage?.("readiness");
@@ -161,12 +159,12 @@ async function createOrderFromReceivingMethod(
 	input: CreateOrderInput,
 	requestUrl: string,
 	context: OrderCreationContext = {},
-	prevalidatedReadiness?: Awaited<ReturnType<typeof checkReceivingMethodReadiness>>,
+	prevalidatedReadiness?: Awaited<ReturnType<typeof checkReceivingMethodOrderReadiness>>,
 ): Promise<ApiOrder> {
 	const methodId = input.receivingMethodId;
 	if (!methodId) throw new Error("Receiving method is required");
 	const [readiness, methods] = await Promise.all([
-		prevalidatedReadiness ?? checkReceivingMethodReadiness(db, methodId),
+		prevalidatedReadiness ?? checkReceivingMethodOrderReadiness(db, methodId),
 		db
 			.prepare(
 				`SELECT rm.id, rm.target_value, rm.min_amount_minor, rm.max_amount_minor,

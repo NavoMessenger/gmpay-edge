@@ -15,7 +15,37 @@ type ReceivingMethodReadinessRow = {
 	connection_healthy: number;
 	payment_method_id: string;
 	target_value: string;
+	adapter?: string;
 };
+
+/**
+ * Fast order-routing validation. It intentionally does not make RPC health
+ * checks or load connection credentials; those are maintained separately by
+ * the operations health checks and must not block checkout creation.
+ */
+export async function checkReceivingMethodOrderReadiness(
+	db: D1Database,
+	methodId: string,
+): Promise<ReceivingMethodReadiness> {
+	const checkedAt = Date.now();
+	const methods = await db
+		.prepare(
+			`SELECT rm.id, rm.enabled, link.payment_asset_id AS payment_method_id,
+			 rm.target_value, pa.kind AS asset_kind, pa.contract_address,
+			 pr.code AS rail_code, pr.adapter,
+			 EXISTS (SELECT 1 FROM payment_ingresses pc WHERE pc.rail_code = pa.rail_code
+			  AND pc.enabled = 1) AS connection_enabled,
+			 1 AS connection_healthy
+			 FROM receiving_methods rm
+			 JOIN receiving_method_assets link ON link.receiving_method_id = rm.id
+			 JOIN payment_assets pa ON pa.id = link.payment_asset_id
+			 JOIN payment_rails pr ON pr.code = pa.rail_code
+			 WHERE rm.id = ?`,
+		)
+		.bind(methodId)
+		.all<ReceivingMethodReadinessRow>();
+	return validateOrderReadiness(methodId, checkedAt, methods.results);
+}
 
 export async function checkReceivingMethodReadiness(
 	db: D1Database,
@@ -102,6 +132,58 @@ export async function checkReceivingMethodReadiness(
 			reason("INVALID_TARGET", "The receiving target is invalid."),
 		]);
 	return result(methodId, checkedAt, "ready", []);
+}
+
+function validateOrderReadiness(
+	methodId: string,
+	checkedAt: number,
+	methods: ReceivingMethodReadinessRow[],
+): ReceivingMethodReadiness {
+	const method = methods[0];
+	if (!method)
+		return result(methodId, checkedAt, "unsupported", [
+			reason("METHOD_NOT_FOUND", "Receiving method does not exist."),
+		]);
+	if (methods.some((row) => row.asset_kind === "token" && !row.contract_address))
+		return result(methodId, checkedAt, "unsupported", [
+			reason("INVALID_ASSET", "The token contract is not configured."),
+		]);
+	if (!method.enabled)
+		return result(methodId, checkedAt, "disabled", [
+			reason("METHOD_DISABLED", "The receiving method is disabled."),
+		]);
+	if (!method.connection_enabled)
+		return result(methodId, checkedAt, "missing_connection", [
+			reason("MISSING_CONNECTION", "Configure an enabled payment connection."),
+		]);
+	if (!method.target_value.trim() || !methods.some(isLocallyValidTarget))
+		return result(methodId, checkedAt, "missing_target", [
+			reason("INVALID_TARGET", "The receiving target is invalid."),
+		]);
+	return result(methodId, checkedAt, "ready", []);
+}
+
+function isLocallyValidTarget(row: ReceivingMethodReadinessRow) {
+	const target = row.target_value.trim();
+	switch (row.adapter) {
+		case "tron":
+			return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(target);
+		case "evm":
+			return /^0x[0-9a-fA-F]{40}$/.test(target);
+		case "solana":
+			return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target);
+		case "ton":
+			return /^(EQ|UQ)[A-Za-z0-9_-]{46}$/.test(target);
+		case "aptos":
+			return /^0x[0-9a-fA-F]{1,64}$/.test(target);
+		case "binance":
+		case "okx":
+			return /^[1-9]\d*$/.test(target);
+		case "okpay":
+			return target.length > 0;
+		default:
+			return false;
+	}
 }
 
 export async function assertReceivingMethodReadyForEnable(
