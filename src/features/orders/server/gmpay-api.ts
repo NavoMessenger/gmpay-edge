@@ -200,6 +200,7 @@ export function gmpayCreateResponse(order: ApiOrder, requestId: string) {
 			),
 			status_detail: order.status,
 			expiration_time: Math.floor(new Date(order.expiresAt).getTime() / 1000),
+			payment_uri: order.receiveAddress ?? "",
 			payment_url: order.checkoutUrl,
 		},
 		request_id: requestId,

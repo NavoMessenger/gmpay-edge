@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { signGmpayParameters } from "#/features/api-keys/server/gmpay-signature";
 import { OrderServiceError } from "#/features/orders/server/create";
 import {
+	gmpayCreateResponse,
 	handleGmpayCreateRequest,
 	handleGmpayQueryRequest,
 } from "#/features/orders/server/gmpay-api";
@@ -45,6 +46,32 @@ describe("GMPay create transaction HTTP handler", () => {
 	});
 
 	afterAll(async () => miniflare.dispose());
+
+	it("returns the selected receiving address as a QR-safe payment URI", () => {
+		expect(
+			gmpayCreateResponse(
+				{
+					orderId: "trade-1",
+					externalOrderId: "merchant-1",
+					status: "pending",
+					amount: "10",
+					currency: "USD",
+					paymentAmount: "10",
+					paymentAsset: "USDT",
+					paymentNetwork: "tron",
+					receiveAddress: "TExampleAddress",
+					checkoutUrl: "https://pay.example/checkout/trade-1",
+					expiresAt: "2026-08-29T00:00:00.000Z",
+				},
+				"request-1",
+			).data,
+		).toMatchObject({
+			payment_uri: "TExampleAddress",
+			receive_address: "TExampleAddress",
+			token: "USDT",
+			network: "tron",
+		});
+	});
 
 	it("rejects an oversized request body before authentication", async () => {
 		const response = await handleGmpayCreateRequest(

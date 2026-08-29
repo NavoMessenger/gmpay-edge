@@ -110,9 +110,11 @@ async function createOrderRecord(
 			`SELECT rm.id FROM receiving_methods rm
 			 JOIN receiving_method_assets link ON link.receiving_method_id = rm.id
 			 JOIN payment_assets pa ON pa.id = link.payment_asset_id
-			 WHERE pa.code = ?
+			 WHERE rm.enabled = 1
+			 AND rm.target_value != ''
+			 AND pa.code = ?
 			 AND pa.rail_code = ?
-			 ORDER BY rm.sort_order, rm.created_at, rm.id`,
+			 ORDER BY RANDOM()`,
 		)
 		.bind(input.paymentAsset, input.paymentNetwork)
 		.all<{ id: string }>();
