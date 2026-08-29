@@ -14,6 +14,9 @@ import {
 import { decimalToUnits } from "#/lib/money";
 import { currencyDecimals, decimalToMinor } from "#/lib/units";
 import { loadOperationalSettings } from "#/server/operational-settings";
+import type { RuntimeCache } from "#/server/runtime/types";
+
+const paymentRouteCacheTtlSeconds = 30;
 
 async function createOrderAwaitingReceivingMethod(
 	db: D1Database,
@@ -106,6 +109,69 @@ async function createOrderRecord(
 		return createOrderFromReceivingMethod(db, input, requestUrl, context);
 	if (!(input.paymentAsset && input.paymentNetwork))
 		return createOrderAwaitingReceivingMethod(db, input, requestUrl, context);
+	const methods = await loadPaymentRouteCandidates(
+		db,
+		input.paymentAsset,
+		input.paymentNetwork,
+		context.cache,
+	);
+	context.stage?.("candidate_query");
+	// Readiness checks are independent. Running them concurrently avoids a
+	// serial D1 round-trip for every configured receiving method while keeping
+	// the same strict readiness and target validation rules.
+	const readinessResults = await Promise.all(
+		methods.map(async (method) => ({
+			method,
+			readiness: await checkReceivingMethodOrderReadiness(db, method.id, {
+				paymentAsset: input.paymentAsset,
+				paymentNetwork: input.paymentNetwork,
+			}),
+		})),
+	);
+	context.stage?.("readiness");
+	const readyMethod = readinessResults.find(({ readiness }) => readiness.ready);
+	if (readyMethod)
+		return createOrderFromReceivingMethod(
+			db,
+			{ ...input, receivingMethodId: readyMethod.method.id },
+			requestUrl,
+			context,
+			readyMethod.readiness,
+		);
+	if (methods.length === 0)
+		throw new OrderServiceError(
+			"receiving_method_not_found",
+			"No receiving method matches the requested asset and rail",
+			422,
+		);
+	throw new OrderServiceError(
+		"receiving_method_not_ready",
+		"No matching receiving method is currently ready",
+		422,
+	);
+}
+
+async function loadPaymentRouteCandidates(
+	db: D1Database,
+	paymentAsset: string,
+	paymentNetwork: string,
+	cache?: RuntimeCache,
+) {
+	const cacheKey = `payment-route:v1:${paymentNetwork}:${paymentAsset}`;
+	if (cache) {
+		try {
+			const cached = await cache.get(cacheKey);
+			const parsed = cached ? JSON.parse(cached) : null;
+			if (
+				Array.isArray(parsed) &&
+				parsed.length > 0 &&
+				parsed.every((id) => typeof id === "string" && id.length > 0)
+			)
+				return parsed.map((id) => ({ id }));
+		} catch {
+			// KV is an optional routing optimisation; D1 remains authoritative.
+		}
+	}
 	const methods = await db
 		.prepare(
 			`SELECT rm.id FROM receiving_methods rm
@@ -119,39 +185,16 @@ async function createOrderRecord(
 				WHERE pc.rail_code = pa.rail_code AND pc.enabled = 1)
 			 ORDER BY RANDOM()`,
 		)
-		.bind(input.paymentAsset, input.paymentNetwork)
+		.bind(paymentAsset, paymentNetwork)
 		.all<{ id: string }>();
-	context.stage?.("candidate_query");
-	// Readiness checks are independent. Running them concurrently avoids a
-	// serial D1 round-trip for every configured receiving method while keeping
-	// the same strict readiness and target validation rules.
-	const readinessResults = await Promise.all(
-		methods.results.map(async (method) => ({
-			method,
-			readiness: await checkReceivingMethodOrderReadiness(db, method.id),
-		})),
-	);
-	context.stage?.("readiness");
-	const readyMethod = readinessResults.find(({ readiness }) => readiness.ready);
-	if (readyMethod)
-		return createOrderFromReceivingMethod(
-			db,
-			{ ...input, receivingMethodId: readyMethod.method.id },
-			requestUrl,
-			context,
-			readyMethod.readiness,
-		);
-	if (methods.results.length === 0)
-		throw new OrderServiceError(
-			"receiving_method_not_found",
-			"No receiving method matches the requested asset and rail",
-			422,
-		);
-	throw new OrderServiceError(
-		"receiving_method_not_ready",
-		"No matching receiving method is currently ready",
-		422,
-	);
+	if (cache && methods.results.length) {
+		void cache
+			.put(cacheKey, JSON.stringify(methods.results.map(({ id }) => id)), {
+				expirationTtl: paymentRouteCacheTtlSeconds,
+			})
+			.catch(() => undefined);
+	}
+	return methods.results;
 }
 
 async function createOrderFromReceivingMethod(
@@ -164,7 +207,11 @@ async function createOrderFromReceivingMethod(
 	const methodId = input.receivingMethodId;
 	if (!methodId) throw new Error("Receiving method is required");
 	const [readiness, methods] = await Promise.all([
-		prevalidatedReadiness ?? checkReceivingMethodOrderReadiness(db, methodId),
+		prevalidatedReadiness ??
+			checkReceivingMethodOrderReadiness(db, methodId, {
+				paymentAsset: input.paymentAsset,
+				paymentNetwork: input.paymentNetwork,
+			}),
 		db
 			.prepare(
 				`SELECT rm.id, rm.target_value, rm.min_amount_minor, rm.max_amount_minor,
@@ -341,6 +388,7 @@ export interface OrderCreationContext {
 	apiKeyId?: string;
 	apiProtocol?: "gmpay" | "epay";
 	stage?: (stage: string) => void;
+	cache?: RuntimeCache;
 }
 
 async function quotePaymentAmount(

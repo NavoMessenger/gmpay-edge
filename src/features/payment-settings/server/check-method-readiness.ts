@@ -14,6 +14,7 @@ type ReceivingMethodReadinessRow = {
 	connection_enabled: number;
 	connection_healthy: number;
 	payment_method_id: string;
+	asset_code?: string;
 	target_value: string;
 	adapter?: string;
 };
@@ -26,11 +27,12 @@ type ReceivingMethodReadinessRow = {
 export async function checkReceivingMethodOrderReadiness(
 	db: D1Database,
 	methodId: string,
+	expected?: { paymentAsset?: string; paymentNetwork?: string },
 ): Promise<ReceivingMethodReadiness> {
 	const checkedAt = Date.now();
 	const methods = await db
 		.prepare(
-			`SELECT rm.id, rm.enabled, link.payment_asset_id AS payment_method_id,
+			`SELECT rm.id, rm.enabled, link.payment_asset_id AS payment_method_id, pa.code AS asset_code,
 			 rm.target_value, pa.kind AS asset_kind, pa.contract_address,
 			 pr.code AS rail_code, pr.adapter,
 			 EXISTS (SELECT 1 FROM payment_ingresses pc WHERE pc.rail_code = pa.rail_code
@@ -44,7 +46,7 @@ export async function checkReceivingMethodOrderReadiness(
 		)
 		.bind(methodId)
 		.all<ReceivingMethodReadinessRow>();
-	return validateOrderReadiness(methodId, checkedAt, methods.results);
+	return validateOrderReadiness(methodId, checkedAt, methods.results, expected);
 }
 
 export async function checkReceivingMethodReadiness(
@@ -138,6 +140,7 @@ function validateOrderReadiness(
 	methodId: string,
 	checkedAt: number,
 	methods: ReceivingMethodReadinessRow[],
+	expected?: { paymentAsset?: string; paymentNetwork?: string },
 ): ReceivingMethodReadiness {
 	const method = methods[0];
 	if (!method)
@@ -159,6 +162,17 @@ function validateOrderReadiness(
 	if (!method.target_value.trim() || !methods.some(isLocallyValidTarget))
 		return result(methodId, checkedAt, "missing_target", [
 			reason("INVALID_TARGET", "The receiving target is invalid."),
+		]);
+	if (
+		expected &&
+		!methods.some(
+			(row) =>
+				(!expected.paymentAsset || row.asset_code === expected.paymentAsset) &&
+				(!expected.paymentNetwork || row.rail_code === expected.paymentNetwork),
+		)
+	)
+		return result(methodId, checkedAt, "unsupported", [
+			reason("METHOD_NOT_FOUND", "Receiving method does not support this route."),
 		]);
 	return result(methodId, checkedAt, "ready", []);
 }

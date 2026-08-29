@@ -318,7 +318,7 @@ type OrderCreator = (
 
 export async function handleGmpayCreateRequest(
 	request: Request,
-	env: Pick<Env, "DB">,
+	env: Pick<Env, "DB"> & { CACHE?: Env["CACHE"] },
 	create: OrderCreator = createOrder,
 ) {
 	const requestId = getRequestId(request);
@@ -357,6 +357,7 @@ export async function handleGmpayCreateRequest(
 				apiKeyId: principal.apiKeyId,
 				apiProtocol: "gmpay",
 				stage,
+				cache: env.CACHE,
 			},
 		);
 		stage("created");
