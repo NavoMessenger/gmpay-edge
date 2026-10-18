@@ -32,7 +32,7 @@ describe("payment connection failover", () => {
 	});
 	afterAll(async () => miniflare.dispose());
 
-	it("tries the next enabled connection and updates health without failing the order", async () => {
+	it("tries the next enabled connection and records scan observations without changing health", async () => {
 		vi.spyOn(Math, "random").mockReturnValue(0);
 		const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
 		const calls: string[] = [];
@@ -87,23 +87,26 @@ describe("payment connection failover", () => {
 		).toBe(true);
 		const health = await db
 			.prepare(
-				"SELECT id, health_status, last_error_code FROM payment_ingresses ORDER BY priority",
+				"SELECT id, health_status, last_error_code, last_payment_scan_error_code FROM payment_ingresses ORDER BY priority",
 			)
 			.all<{
 				id: string;
 				health_status: string;
 				last_error_code: string | null;
+				last_payment_scan_error_code: string | null;
 			}>();
 		expect(health.results).toEqual([
 			{
 				id: "connection-primary",
-				health_status: "unhealthy",
-				last_error_code: "network",
+				health_status: "healthy",
+				last_error_code: null,
+				last_payment_scan_error_code: "network",
 			},
 			{
 				id: "connection-fallback",
 				health_status: "healthy",
 				last_error_code: null,
+				last_payment_scan_error_code: null,
 			},
 		]);
 		const order = await db
@@ -144,9 +147,9 @@ describe("payment connection failover", () => {
 			.run();
 		await db
 			.prepare(
-				`CREATE TRIGGER reject_healthy_connection_update
-			 BEFORE UPDATE OF health_status ON payment_ingresses
-			 WHEN NEW.health_status = 'healthy'
+				`CREATE TRIGGER reject_scan_observation_update
+			 BEFORE UPDATE OF last_payment_scan_at ON payment_ingresses
+			 WHEN NEW.last_payment_scan_error_code IS NULL
 			 BEGIN SELECT RAISE(FAIL, 'simulated downstream D1 failure'); END`,
 			)
 			.run();
@@ -187,7 +190,7 @@ describe("payment connection failover", () => {
 				),
 			).rejects.toThrow("simulated downstream D1 failure");
 		} finally {
-			await db.prepare("DROP TRIGGER reject_healthy_connection_update").run();
+			await db.prepare("DROP TRIGGER reject_scan_observation_update").run();
 		}
 
 		expect(calls.length).toBeGreaterThan(0);

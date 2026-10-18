@@ -619,25 +619,23 @@ describe("D1 payment processing flow", () => {
 		});
 
 		await expect(
-			processScannedTransactions(
-				env,
-				"order-expired-isolated",
-				[
-					transaction({
-						hash: "tx-for-another-instance",
-						to: target,
-						amountUnits: 12_389_000n,
-						confirmations: 2,
-					}),
-				],
-			),
+			processScannedTransactions(env, "order-expired-isolated", [
+				transaction({
+					hash: "tx-for-another-instance",
+					to: target,
+					amountUnits: 12_389_000n,
+					confirmations: 2,
+				}),
+			]),
 		).resolves.toEqual({
 			skippedPreviouslyAttributed: 0,
 			skippedAmbiguous: 1,
 		});
 		await expect(
 			db
-				.prepare("SELECT COUNT(*) AS count FROM order_payments WHERE order_id = ?")
+				.prepare(
+					"SELECT COUNT(*) AS count FROM order_payments WHERE order_id = ?",
+				)
 				.bind("order-expired-isolated")
 				.first<{ count: number }>(),
 		).resolves.toEqual({ count: 0 });

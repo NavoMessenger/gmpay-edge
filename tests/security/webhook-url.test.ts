@@ -83,5 +83,4 @@ describe("webhook URL validation", () => {
 		expect(redirectModes).toHaveLength(12);
 		expect(redirectModes.every((mode) => mode === "manual")).toBe(true);
 	});
-
 });

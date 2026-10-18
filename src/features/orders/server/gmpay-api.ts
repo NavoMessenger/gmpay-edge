@@ -15,8 +15,8 @@ import {
 	OrderServiceError,
 } from "#/features/orders/server/create";
 import { type ApiOrder, getOrder } from "#/features/orders/server/query";
-import { requestId as getRequestId } from "#/server/http";
 import { quoteWithExchangeRate } from "#/features/payment-settings/server/rates";
+import { requestId as getRequestId } from "#/server/http";
 import {
 	RequestBodyTooLargeError,
 	readLimitedRequestText,
@@ -169,7 +169,12 @@ export async function handleGmpayOptionsRequest(
 			{ status_code: 200, message: "success", data, request_id: requestId },
 			200,
 		);
-	} catch {
+	} catch (error) {
+		if (error instanceof GmpayRateLimitError)
+			return gatewayResponse(
+				gmpayError(requestId, 429, "rate limit exceeded"),
+				429,
+			);
 		return gatewayResponse(gmpayError(requestId, 500, "system error"), 500);
 	}
 }

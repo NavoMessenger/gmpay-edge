@@ -122,12 +122,12 @@ async function authenticateParameters(
 			)
 			.bind(pid)
 			.first<{
-			id: string;
-			secret_encrypted: string;
-			scopes: string;
-			enabled: number;
-			expires_at: number | null;
-			revoked_at: number | null;
+				id: string;
+				secret_encrypted: string;
+				scopes: string;
+				enabled: number;
+				expires_at: number | null;
+				revoked_at: number | null;
 			}>(),
 		loadRuntimeConfig(db),
 	]);
@@ -151,11 +151,10 @@ async function authenticateParameters(
 	const rate = await claimApiRateLimit(db, { apiKeyId: row.id, limit: 120 });
 	if (!rate.allowed) throw new GmpayRateLimitError("API rate limit exceeded");
 	const now = Date.now();
-	db
-		.prepare(
-			`UPDATE api_keys SET last_used_at = ?, updated_at = ?
+	db.prepare(
+		`UPDATE api_keys SET last_used_at = ?, updated_at = ?
 			 WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)`,
-		)
+	)
 		.bind(now, now, row.id, now - LAST_USED_WRITE_INTERVAL_MS)
 		.run()
 		.catch(() => void 0);

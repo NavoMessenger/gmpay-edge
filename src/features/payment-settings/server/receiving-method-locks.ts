@@ -82,8 +82,7 @@ export async function allocateUniqueReceivingMethodAndSnapshot(
 	},
 ) {
 	const configuredDecimals =
-		input.checkoutAmountDecimals ??
-		(await loadCheckoutAmountDecimals(db));
+		input.checkoutAmountDecimals ?? (await loadCheckoutAmountDecimals(db));
 	const quantized = quantizeUnitsUp(
 		parseAmountUnits(input.expectedAmountUnits),
 		input.decimals,
@@ -107,7 +106,7 @@ export async function allocateUniqueReceivingMethodAndSnapshot(
 		try {
 			const allocated = await allocateReceivingMethodAndSnapshot(db, {
 				...allocationInput,
-				...(prepared ? { prepared } : {}),
+				...(prepared ? { prepared, skipLockMaintenance: true } : {}),
 				expectedAmountUnits,
 				...(input.order ? { order: input.order } : {}),
 				...(input.existingOrder ? { existingOrder: input.existingOrder } : {}),
@@ -139,23 +138,28 @@ export async function allocateReceivingMethodAndSnapshot(
 ) {
 	parseAmountUnits(input.expectedAmountUnits);
 	const now = input.prepared?.now ?? input.now ?? Date.now();
-	const reusableAt = input.prepared?.reusableAt ?? Math.max(
-		input.expiresAt,
-		input.reusableAt ?? input.expiresAt + 24 * 3_600_000,
-	);
-	if (!input.prepared && !(input.skipLockMaintenance ?? false))
+	const reusableAt =
+		input.prepared?.reusableAt ??
+		Math.max(
+			input.expiresAt,
+			input.reusableAt ?? input.expiresAt + 24 * 3_600_000,
+		);
+	if (!input.skipLockMaintenance) {
 		await Promise.all([
-		releaseExpiredReceivingMethodLocks(
-			db,
-			now,
-			input.immediateReleaseMode ?? false,
-		),
-		clearReusableReceivingMethodLockKeys(db, now),
+			releaseExpiredReceivingMethodLocks(
+				db,
+				now,
+				input.immediateReleaseMode ?? false,
+			),
+			clearReusableReceivingMethodLockKeys(db, now),
 		]);
-	if (!input.prepared) input.stage?.("lock_cleanup");
-	const method = input.prepared?.method ?? (await db
-		.prepare(
-			`SELECT rm.id, rm.min_amount_minor, rm.max_amount_minor,
+		input.stage?.("lock_cleanup");
+	}
+	const method =
+		input.prepared?.method ??
+		(await db
+			.prepare(
+				`SELECT rm.id, rm.min_amount_minor, rm.max_amount_minor,
 			 rm.target_value, asset.id AS payment_method_id,
 			 asset.default_confirmations,
 			 asset.id AS asset_id, asset.rail_code, connection.id AS connection_id
@@ -167,19 +171,19 @@ export async function allocateReceivingMethodAndSnapshot(
 			 WHERE rm.id = ? AND asset.id = ? AND rm.enabled = 1 AND rm.target_value != ''
 				 AND connection.enabled = 1
 			 ORDER BY connection.priority, connection.id LIMIT 1`,
-		)
-		.bind(input.receivingMethodId, input.paymentMethodId)
-		.first<{
-			id: string;
-			min_amount_minor: string | null;
-			max_amount_minor: string | null;
-			target_value: string;
-			payment_method_id: string;
-			default_confirmations: number;
-			asset_id: string;
-			rail_code: string;
-			connection_id: string;
-		}>());
+			)
+			.bind(input.receivingMethodId, input.paymentMethodId)
+			.first<{
+				id: string;
+				min_amount_minor: string | null;
+				max_amount_minor: string | null;
+				target_value: string;
+				payment_method_id: string;
+				default_confirmations: number;
+				asset_id: string;
+				rail_code: string;
+				connection_id: string;
+			}>());
 	if (!input.prepared) input.stage?.("lock_method_lookup");
 	if (!method)
 		throw new ReceivingMethodUnavailableError(

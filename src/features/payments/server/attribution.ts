@@ -5,7 +5,14 @@ import { immediateReleaseModeSql } from "#/server/operational-settings";
 
 type AttributionCandidate = {
 	order_id: string;
-	status: "pending" | "confirming" | "partially_paid" | "paid" | "overpaid" | "expired" | "cancelled";
+	status:
+		| "pending"
+		| "confirming"
+		| "partially_paid"
+		| "paid"
+		| "overpaid"
+		| "expired"
+		| "cancelled";
 	expected_amount_units: string;
 	received_amount_units: string;
 };
@@ -73,7 +80,7 @@ export async function resolvePaymentTransactionOrder(
 		: "order_payment_snapshots_target_idx";
 	const candidates = await db
 		.prepare(
-		`SELECT DISTINCT o.id AS order_id, o.status, o.received_amount_units,
+			`SELECT DISTINCT o.id AS order_id, o.status, o.received_amount_units,
 			 ops.expected_amount_units
 			 FROM order_payment_snapshots ops INDEXED BY ${targetIndex}
 			 JOIN orders o ON o.id = ops.order_id

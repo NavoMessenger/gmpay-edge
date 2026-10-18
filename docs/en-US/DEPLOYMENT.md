@@ -9,6 +9,12 @@ EPay boundary adapter.
 
 ## Deployment paths
 
+### Manual deployment from your GitHub repository
+
+Connect GitHub in Cloudflare Workers and select your repository and its `main` branch. Private repositories require access through the Cloudflare GitHub App. Use the repository root, `bun run build` as the Build command, and `wrangler deploy` as the Deploy command. Workers Builds sets `WORKERS_CI=1`, enabling resource preparation, remote D1 migrations, and resolved bindings in the build output.
+
+Source configuration does not retain account-specific D1/KV IDs. The build reuses resources with matching names, so confirm the target account and back up data before updating an existing payment instance. Independent instances require different Worker and resource names. Commit all SQL migrations, including `0012` and `0013` in this version. After deployment, verify `/healthz`, login, queues, and a signed order with its callback. Keep the existing database for upgrades; use `/install` only for a new instance.
+
 ### Deploy button
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/GMWalletApp/gmpay-edge)

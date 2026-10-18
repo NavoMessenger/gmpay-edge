@@ -8,6 +8,12 @@
 
 ## 部署方式
 
+### 从自己的 GitHub 仓库手动部署
+
+在 Cloudflare Workers 中连接 GitHub 并选择自己的仓库和 `main` 分支；私有仓库需要授权 Cloudflare GitHub App 访问。根目录保持仓库根目录，Build command 使用 `bun run build`，Deploy command 使用 `wrangler deploy`。Workers Builds 的 `WORKERS_CI=1` 会启用资源准备、远端 D1 migration 和构建产物绑定解析。
+
+源码配置不保存账号专属的 D1/KV ID。构建会复用同名资源，因此连接已有支付实例时，先确认目标账号并备份数据；独立实例必须使用不同的 Worker 和资源名称。更新版本时提交全部 SQL migration，本版包括 `0012` 和 `0013`。部署后验证 `/healthz`、登录、队列和一笔签名订单及回调；已有实例保留原数据库，首次安装才访问 `/install`。
+
 ### 一键部署
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/GMWalletApp/gmpay-edge)

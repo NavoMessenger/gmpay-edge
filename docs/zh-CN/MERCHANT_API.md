@@ -11,6 +11,8 @@ GMPay 是主商户协议。EPay 只是同一 API 凭证、订单服务、收银�
 
 ## GMPay 创建交易
 
+创建订单前可使用签名的 `GET /payments/gmpay/v1/order/payment-options`，传入 `pid`、`currency`、`amount` 和 `signature` 查询可用收款方式报价。接口需要 `orders:create` Scope，`data` 中每项包含 `receiving_method_id`、`token`、`network`、`network_name` 和十进制字符串 `actual_amount`。报价不会占用金额或创建订单，最终可用性和金额以创建订单时为准。
+
 向以下地址发送 JSON 或 `application/x-www-form-urlencoded`：
 
 ```text

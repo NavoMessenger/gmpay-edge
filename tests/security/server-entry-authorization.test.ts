@@ -143,7 +143,10 @@ const permissionContracts = [
 	["audit:read", ["listAuditLogsFn"]],
 	["audit:create", ["exportAuditLogsFn"]],
 	["operations:read", ["getOperationsOverviewFn", "getQueueOverviewFn"]],
-	["operations:update", ["runOperationsTaskFn", "retryQueueFn"]],
+	[
+		"operations:update",
+		["runOperationsTaskFn", "retryQueueFn", "updateOperationScheduleFn"],
+	],
 	["settings:read", ["listEmailChannelsFn", "listSystemSettingsFn"]],
 	[
 		"settings:update",

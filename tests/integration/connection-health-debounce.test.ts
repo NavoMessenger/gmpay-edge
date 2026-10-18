@@ -51,7 +51,9 @@ describe("scheduled payment connection health debounce", () => {
 
 	it("keeps an unknown connection unknown until a successful automatic check", async () => {
 		await db
-			.prepare("UPDATE payment_ingresses SET health_status = 'unknown' WHERE id = 'connection'")
+			.prepare(
+				"UPDATE payment_ingresses SET health_status = 'unknown' WHERE id = 'connection'",
+			)
 			.run();
 		await refresh(false);
 		await refresh(false);
@@ -102,16 +104,12 @@ describe("scheduled payment connection health debounce", () => {
 	});
 
 	async function refresh(healthy: boolean) {
-		return refreshEnabledPaymentConnectionHealth(
-			db,
-			20,
-			async () => [
-				{
-					id: "connection",
-					adapter: healthAdapter(healthy),
-				},
-			],
-		);
+		return refreshEnabledPaymentConnectionHealth(db, 20, async () => [
+			{
+				id: "connection",
+				adapter: healthAdapter(healthy),
+			},
+		]);
 	}
 
 	function healthAdapter(healthy: boolean) {

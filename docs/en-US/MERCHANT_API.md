@@ -16,6 +16,8 @@ Scopes are checked independently and fail closed when stored scope data is inval
 
 ## GMPay create transaction
 
+To quote available receiving methods before creating an order, send a signed `GET /payments/gmpay/v1/order/payment-options` with `pid`, `currency`, `amount`, and `signature`. It requires `orders:create` scope and returns `data` entries containing `receiving_method_id`, `token`, `network`, `network_name`, and decimal-string `actual_amount`. A quote does not reserve an amount or create an order; availability and the final amount are decided during creation.
+
 Send JSON or `application/x-www-form-urlencoded` to:
 
 ```text

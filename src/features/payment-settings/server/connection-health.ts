@@ -189,7 +189,15 @@ async function saveHealth(
 	errorCode: string | null,
 	mode: "automatic" | "immediate" = "immediate",
 ) {
-	await healthUpdate(db, id, healthy, latency, checkedAt, errorCode, mode).run();
+	await healthUpdate(
+		db,
+		id,
+		healthy,
+		latency,
+		checkedAt,
+		errorCode,
+		mode,
+	).run();
 }
 
 function healthUpdate(

@@ -1,13 +1,13 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import type { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal, Pencil, Play } from "lucide-react";
-import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { ProButton } from "#/components/pro/base/button";
-import { ProTable } from "#/components/pro/table";
 import { ModalForm } from "#/components/pro/form";
+import { ProTable } from "#/components/pro/table";
 import { Badge } from "#/components/ui/badge";
 import {
 	DropdownMenu,
@@ -261,7 +261,8 @@ function TaskScheduleControl({
 				{m.common_edit()}
 			</Link>
 		);
-	if (!row.configKey || row.intervalMs == null)
+	const configKey = row.configKey;
+	if (!configKey || row.intervalMs == null)
 		return (
 			<span className="text-muted-foreground">
 				{m.jobs_schedule_triggered()}
@@ -293,7 +294,7 @@ function TaskScheduleControl({
 				},
 			]}
 			onFinish={async (values) =>
-				onSave(row.configKey!, Number(values.interval) * 1000)
+				onSave(configKey, Number(values.interval) * 1000)
 			}
 		/>
 	);

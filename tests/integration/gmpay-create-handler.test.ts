@@ -5,6 +5,7 @@ import { OrderServiceError } from "#/features/orders/server/create";
 import {
 	gmpayCreateResponse,
 	handleGmpayCreateRequest,
+	handleGmpayOptionsRequest,
 	handleGmpayQueryRequest,
 } from "#/features/orders/server/gmpay-api";
 import { getOrder } from "#/features/orders/server/query";
@@ -46,6 +47,68 @@ describe("GMPay create transaction HTTP handler", () => {
 	});
 
 	afterAll(async () => miniflare.dispose());
+
+	it("requires a valid signature and returns available payment quotes", async () => {
+		const parameters = { pid, currency: "USD", amount: "1" };
+		const url = new URL(
+			"https://pay.example/payments/gmpay/v1/order/payment-options",
+		);
+		url.search = new URLSearchParams({
+			...parameters,
+			signature: "0".repeat(64),
+		}).toString();
+		expect(
+			(await handleGmpayOptionsRequest(new Request(url), { DB: db })).status,
+		).toBe(401);
+		url.searchParams.set("signature", signGmpayParameters(parameters, secret));
+		const response = await handleGmpayOptionsRequest(new Request(url), {
+			DB: db,
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ status_code: 200, data: [] });
+	});
+
+	it("returns HTTP 429 when payment quote requests exceed the API key limit", async () => {
+		const optionsPid = "100000000002";
+		await db
+			.prepare(
+				"INSERT INTO api_keys (id, name, pid, secret_encrypted, scopes, created_at, updated_at) VALUES ('options-key', 'Options', ?, ?, '[\"orders:create\"]', 1, 1)",
+			)
+			.bind(optionsPid, await encryptSecret(secret, pepper))
+			.run();
+		const windowStart = Math.floor(Date.now() / 60_000) * 60_000;
+		await db.batch(
+			[windowStart, windowStart + 60_000].map((start) =>
+				db
+					.prepare(
+						"INSERT INTO rate_limit_counters (id, bucket_key, window_start, count, expires_at, created_at, updated_at) VALUES (?, 'api-key:options-key', ?, 120, ?, ?, ?)",
+					)
+					.bind(crypto.randomUUID(), start, start + 120_000, start, start),
+			),
+		);
+		try {
+			const parameters = { pid: optionsPid, currency: "USD", amount: "1" };
+			const url = new URL(
+				"https://pay.example/payments/gmpay/v1/order/payment-options",
+			);
+			url.search = new URLSearchParams({
+				...parameters,
+				signature: signGmpayParameters(parameters, secret),
+			}).toString();
+			const response = await handleGmpayOptionsRequest(new Request(url), {
+				DB: db,
+			});
+			expect(response.status).toBe(429);
+			expect(await response.json()).toMatchObject({ status_code: 429 });
+		} finally {
+			await db.batch([
+				db.prepare("DELETE FROM api_keys WHERE id = 'options-key'"),
+				db.prepare(
+					"DELETE FROM rate_limit_counters WHERE bucket_key = 'api-key:options-key'",
+				),
+			]);
+		}
+	});
 
 	it("returns the selected receiving address as a QR-safe payment URI", () => {
 		expect(
@@ -297,9 +360,9 @@ describe("GMPay create transaction HTTP handler", () => {
 		);
 		expect(created.status).toBe(200);
 		expect(createCounters).toMatchObject({
-			d1Prepare: 5,
+			d1Prepare: 6,
 			d1StatementFirst: 2,
-			d1StatementAll: 1,
+			d1StatementAll: 2,
 			d1StatementRun: 2,
 			d1Batch: 0,
 		});
@@ -321,9 +384,9 @@ describe("GMPay create transaction HTTP handler", () => {
 		} as Env);
 		expect(queried.status).toBe(200);
 		expect(queryCounters).toMatchObject({
-			d1Prepare: 4,
+			d1Prepare: 5,
 			d1StatementFirst: 3,
-			d1StatementAll: 0,
+			d1StatementAll: 1,
 			d1StatementRun: 1,
 			d1Batch: 0,
 		});
@@ -347,9 +410,9 @@ describe("GMPay create transaction HTTP handler", () => {
 		);
 		expect(rejected.status).toBe(401);
 		expect(rejectedCounters).toMatchObject({
-			d1Prepare: 1,
+			d1Prepare: 2,
 			d1StatementFirst: 1,
-			d1StatementAll: 0,
+			d1StatementAll: 1,
 			d1StatementRun: 0,
 			d1Batch: 0,
 		});
