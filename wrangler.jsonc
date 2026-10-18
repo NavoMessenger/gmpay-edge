@@ -10,38 +10,38 @@
 	"d1_databases": [
 		{
 			"binding": "DB",
-			"database_name": "gmpay-edge",
+			"database_name": "gmpay-edge-mod",
 			"migrations_dir": "drizzle"
 		}
 	],
-	"r2_buckets": [{ "binding": "FILES", "bucket_name": "gmpay-edge-files" }],
+	"r2_buckets": [{ "binding": "FILES", "bucket_name": "gmpay-edge-mod-files" }],
 	"kv_namespaces": [
 		{ "binding": "CACHE" }
 	],
 	"send_email": [{ "name": "EMAIL" }],
 	"queues": {
 		"producers": [
-			{ "binding": "WEBHOOK_QUEUE", "queue": "gmpay-edge-webhooks" },
-			{ "binding": "PAYMENT_QUEUE", "queue": "gmpay-edge-payments" }
+			{ "binding": "WEBHOOK_QUEUE", "queue": "gmpay-edge-mod-webhooks" },
+			{ "binding": "PAYMENT_QUEUE", "queue": "gmpay-edge-mod-payments" }
 		],
 		"consumers": [
 			{
-				"queue": "gmpay-edge-webhooks",
+				"queue": "gmpay-edge-mod-webhooks",
 				"max_batch_size": 10,
 				"max_batch_timeout": 1,
 				"max_concurrency": 5,
 				"max_retries": 8,
 				"retry_delay": 15,
-				"dead_letter_queue": "gmpay-edge-webhooks-dlq"
+				"dead_letter_queue": "gmpay-edge-mod-webhooks-dlq"
 			},
 			{
-				"queue": "gmpay-edge-payments",
+				"queue": "gmpay-edge-mod-payments",
 				"max_batch_size": 10,
 				"max_batch_timeout": 1,
 				"max_concurrency": 1,
 				"max_retries": 5,
 				"retry_delay": 15,
-				"dead_letter_queue": "gmpay-edge-payments-dlq"
+				"dead_letter_queue": "gmpay-edge-mod-payments-dlq"
 			}
 		]
 	},
