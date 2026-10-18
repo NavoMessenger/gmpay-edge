@@ -70,4 +70,18 @@ describe("webhook URL validation", () => {
 		).resolves.toEqual(["104.21.87.111"]);
 		expect(calls).toBe(4);
 	});
+
+	it("uses a Workers-compatible redirect mode and rejects DNS redirects", async () => {
+		const redirectModes: RequestRedirect[] = [];
+		const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+			redirectModes.push(init?.redirect ?? "follow");
+			return new Response("", { status: 302 });
+		};
+		await expect(
+			resolveWebhookHostname("merchant.example", fetcher),
+		).rejects.toThrow("Webhook DNS resolver temporarily unavailable");
+		expect(redirectModes).toHaveLength(12);
+		expect(redirectModes.every((mode) => mode === "manual")).toBe(true);
+	});
+
 });

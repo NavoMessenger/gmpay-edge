@@ -126,7 +126,9 @@ async function queryDns(
 			: `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=${type}`;
 	const response = await fetcher(url, {
 		headers: { accept: "application/dns-json" },
-		redirect: "error",
+		// Workers does not implement Fetch's `error` redirect mode. `manual`
+		// preserves the same fail-closed behaviour below because 3xx is not OK.
+		redirect: "manual",
 		signal: AbortSignal.timeout(3_000),
 	});
 	if (!response.ok) throw new Error("DNS resolver request failed");
