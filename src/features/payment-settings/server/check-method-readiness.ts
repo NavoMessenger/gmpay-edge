@@ -14,40 +14,8 @@ type ReceivingMethodReadinessRow = {
 	connection_enabled: number;
 	connection_healthy: number;
 	payment_method_id: string;
-	asset_code?: string;
 	target_value: string;
-	adapter?: string;
 };
-
-/**
- * Fast order-routing validation. It intentionally does not make RPC health
- * checks or load connection credentials; those are maintained separately by
- * the operations health checks and must not block checkout creation.
- */
-export async function checkReceivingMethodOrderReadiness(
-	db: D1Database,
-	methodId: string,
-	expected?: { paymentAsset?: string; paymentNetwork?: string },
-): Promise<ReceivingMethodReadiness> {
-	const checkedAt = Date.now();
-	const methods = await db
-		.prepare(
-			`SELECT rm.id, rm.enabled, link.payment_asset_id AS payment_method_id, pa.code AS asset_code,
-			 rm.target_value, pa.kind AS asset_kind, pa.contract_address,
-			 pr.code AS rail_code, pr.adapter,
-			 EXISTS (SELECT 1 FROM payment_ingresses pc WHERE pc.rail_code = pa.rail_code
-			  AND pc.enabled = 1) AS connection_enabled,
-			 1 AS connection_healthy
-			 FROM receiving_methods rm
-			 JOIN receiving_method_assets link ON link.receiving_method_id = rm.id
-			 JOIN payment_assets pa ON pa.id = link.payment_asset_id
-			 JOIN payment_rails pr ON pr.code = pa.rail_code
-			 WHERE rm.id = ?`,
-		)
-		.bind(methodId)
-		.all<ReceivingMethodReadinessRow>();
-	return validateOrderReadiness(methodId, checkedAt, methods.results, expected);
-}
 
 export function isLocallyValidTarget(target: string, adapter?: string | null) {
 	if (!target.trim()) return false;
@@ -157,56 +125,6 @@ export async function checkReceivingMethodReadiness(
 			reason("INVALID_TARGET", "The receiving target is invalid."),
 		]);
 	return result(methodId, checkedAt, "ready", []);
-}
-
-function validateOrderReadiness(
-	methodId: string,
-	checkedAt: number,
-	methods: ReceivingMethodReadinessRow[],
-	expected?: { paymentAsset?: string; paymentNetwork?: string },
-): ReceivingMethodReadiness {
-	const method = methods[0];
-	if (!method)
-		return result(methodId, checkedAt, "unsupported", [
-			reason("METHOD_NOT_FOUND", "Receiving method does not exist."),
-		]);
-	if (
-		methods.some((row) => row.asset_kind === "token" && !row.contract_address)
-	)
-		return result(methodId, checkedAt, "unsupported", [
-			reason("INVALID_ASSET", "The token contract is not configured."),
-		]);
-	if (!method.enabled)
-		return result(methodId, checkedAt, "disabled", [
-			reason("METHOD_DISABLED", "The receiving method is disabled."),
-		]);
-	if (!method.connection_enabled)
-		return result(methodId, checkedAt, "missing_connection", [
-			reason("MISSING_CONNECTION", "Configure an enabled payment connection."),
-		]);
-	if (!method.target_value.trim() || !methods.some(validateLocalTarget))
-		return result(methodId, checkedAt, "missing_target", [
-			reason("INVALID_TARGET", "The receiving target is invalid."),
-		]);
-	if (
-		expected &&
-		!methods.some(
-			(row) =>
-				(!expected.paymentAsset || row.asset_code === expected.paymentAsset) &&
-				(!expected.paymentNetwork || row.rail_code === expected.paymentNetwork),
-		)
-	)
-		return result(methodId, checkedAt, "unsupported", [
-			reason(
-				"METHOD_NOT_FOUND",
-				"Receiving method does not support this route.",
-			),
-		]);
-	return result(methodId, checkedAt, "ready", []);
-}
-
-function validateLocalTarget(row: ReceivingMethodReadinessRow) {
-	return isLocallyValidTarget(row.target_value.trim(), row.adapter);
 }
 
 export async function assertReceivingMethodReadyForEnable(

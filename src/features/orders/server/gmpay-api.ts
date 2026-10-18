@@ -15,7 +15,10 @@ import {
 	OrderServiceError,
 } from "#/features/orders/server/create";
 import { type ApiOrder, getOrder } from "#/features/orders/server/query";
-import { quoteWithExchangeRate } from "#/features/payment-settings/server/rates";
+import {
+	listPaymentCandidates,
+	quotePaymentCandidates,
+} from "#/features/payment-settings/server/payment-candidates";
 import { requestId as getRequestId } from "#/server/http";
 import {
 	RequestBodyTooLargeError,
@@ -135,36 +138,18 @@ export async function handleGmpayOptionsRequest(
 				gmpayError(requestId, 401, "signature verification failed"),
 				401,
 			);
-		const rows = await env.DB.prepare(
-			`SELECT rm.id AS receiving_method_id, a.code AS token, a.rail_code AS network, pr.name AS network_name, a.decimals FROM receiving_methods rm JOIN receiving_method_assets link ON link.receiving_method_id = rm.id JOIN payment_assets a ON a.id = link.payment_asset_id JOIN payment_rails pr ON pr.code = a.rail_code WHERE rm.enabled = 1 AND rm.target_value != '' AND EXISTS (SELECT 1 FROM payment_ingresses pc WHERE pc.rail_code = a.rail_code AND pc.enabled = 1 AND (pr.kind IN ('exchange','wallet') OR pc.health_status = 'healthy')) ORDER BY rm.sort_order, rm.name`,
-		).all<{
-			receiving_method_id: string;
-			token: string;
-			network: string;
-			network_name: string;
-			decimals: number;
-		}>();
-		const data = [];
-		for (const row of rows.results) {
-			try {
-				const quote = await quoteWithExchangeRate(env.DB, {
-					amount: parsed.data.amount,
-					currency: parsed.data.currency,
-					paymentAsset: row.token,
-					assetDecimals: row.decimals,
-				});
-				if (quote)
-					data.push({
-						receiving_method_id: row.receiving_method_id,
-						token: row.token,
-						network: row.network,
-						network_name: row.network_name,
-						actual_amount: quote.paymentAmount,
-					});
-			} catch {
-				/* exclude unavailable quote */
-			}
-		}
+		const quoted = await quotePaymentCandidates(
+			env.DB,
+			await listPaymentCandidates(env.DB),
+			parsed.data,
+		);
+		const data = quoted.options.map(({ candidate, quote }) => ({
+			receiving_method_id: candidate.id,
+			token: candidate.code,
+			network: candidate.rail_code,
+			network_name: candidate.network_name,
+			actual_amount: quote.paymentAmount,
+		}));
 		return gatewayResponse(
 			{ status_code: 200, message: "success", data, request_id: requestId },
 			200,
@@ -323,7 +308,7 @@ type OrderCreator = (
 
 export async function handleGmpayCreateRequest(
 	request: Request,
-	env: Pick<Env, "DB"> & { CACHE?: Env["CACHE"] },
+	env: Pick<Env, "DB">,
 	create: OrderCreator = createOrder,
 ) {
 	const requestId = getRequestId(request);
@@ -362,7 +347,6 @@ export async function handleGmpayCreateRequest(
 				apiKeyId: principal.apiKeyId,
 				apiProtocol: "gmpay",
 				stage,
-				cache: env.CACHE,
 			},
 		);
 		stage("created");

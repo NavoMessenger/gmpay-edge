@@ -1091,5 +1091,9 @@
 	"webhooks_error_provider_event_not_found": "The provider payment event was not found.",
 	"webhooks_error_provider_event_not_retryable": "This provider payment event cannot be retried.",
 	"webhooks_error_provider_event_retry_in_progress": "This provider payment event is already being retried.",
-	"webhooks_error_provider_event_queue_unavailable": "The payment event queue is unavailable."
+	"webhooks_error_provider_event_queue_unavailable": "The payment event queue is unavailable.",
+	"checkout_estimated_amount": "Estimated payment",
+	"checkout_final_amount_hint": "Pay the final amount shown after confirmation; address allocation may adjust the last digits.",
+	"checkout_options_load_failed": "Payment options could not be refreshed. Please retry.",
+	"checkout_refresh_failed": "Unable to refresh the order. Your last payment details are still shown."
 }

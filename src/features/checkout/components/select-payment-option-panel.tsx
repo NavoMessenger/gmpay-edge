@@ -1,5 +1,5 @@
 import { ArrowLeft, Building2, Link2, WalletCards } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AssetLabel, NetworkLabel } from "#/components/crypto-icons/labels";
 import { Button } from "#/components/ui/button";
 import {
@@ -24,7 +24,11 @@ export function SelectPaymentOptionPanel({
 	onConfirm,
 	options,
 	unavailableReason,
+	failed,
+	onRetry,
 }: {
+	failed?: boolean;
+	onRetry?: () => void;
 	busy: boolean;
 	loading?: boolean;
 	onBack?: () => void;
@@ -32,44 +36,34 @@ export function SelectPaymentOptionPanel({
 	options: Option[];
 	unavailableReason?: "rate_unavailable" | "payment_method_unavailable" | null;
 }) {
-	const kinds = useMemo(
-		() => [...new Set(options.map((option) => option.railKind))],
-		[options],
-	);
-	const [kind, setKind] = useState<RailKind | "">("");
-	const [receivingMethodId, setReceivingMethodId] = useState("");
-	const [paymentMethodId, setPaymentMethodId] = useState("");
-	useEffect(() => {
-		if (!kind && kinds[0]) setKind(kinds[0]);
-	}, [kind, kinds]);
+	const kinds = [...new Set(options.map((option) => option.railKind))];
+	const [preferredKind, setKind] = useState<RailKind | "">("");
+	const [preferredNetwork, setNetwork] = useState("");
+	const [preferredAsset, setAsset] = useState("");
+	const kind = kinds.find((value) => value === preferredKind) ?? kinds[0] ?? "";
 	const kindOptions = options.filter((option) => option.railKind === kind);
-	const receivingMethods = Array.from(
-		new Map(
+	const networks = [
+		...new Map(
 			kindOptions.map((option) => [
-				option.receivingMethodId,
-				{
-					id: option.receivingMethodId,
-					name: option.receivingMethodName,
-					network: option.network,
-					networkName: option.networkName,
-				},
+				option.network,
+				{ id: option.network, name: option.networkName },
 			]),
 		).values(),
-	);
+	];
+	const network =
+		networks.find((value) => value.id === preferredNetwork)?.id ??
+		networks[0]?.id ??
+		"";
+	const assets = kindOptions.filter((option) => option.network === network);
+	const selected =
+		assets.find((option) => option.asset === preferredAsset) ?? assets[0];
+	const paymentMethodId = selected?.paymentMethodId ?? "";
+
 	useEffect(() => {
-		if (!receivingMethods.some((method) => method.id === receivingMethodId))
-			setReceivingMethodId(receivingMethods[0]?.id ?? "");
-	}, [receivingMethodId, receivingMethods]);
-	const assets = kindOptions.filter(
-		(option) => option.receivingMethodId === receivingMethodId,
-	);
-	useEffect(() => {
-		if (!assets.some((asset) => asset.paymentMethodId === paymentMethodId))
-			setPaymentMethodId(assets[0]?.paymentMethodId ?? "");
-	}, [assets, paymentMethodId]);
-	const selected = assets.find(
-		(option) => option.paymentMethodId === paymentMethodId,
-	);
+		setKind(kind);
+		setNetwork(network);
+		setAsset(selected?.asset ?? "");
+	}, [kind, network, selected?.asset]);
 
 	return (
 		<section className="w-full pb-4">
@@ -78,6 +72,7 @@ export function SelectPaymentOptionPanel({
 					<Button
 						aria-label={m.checkout_back()}
 						className="size-8 rounded-full"
+						disabled={busy}
 						onClick={onBack}
 						size="icon-sm"
 						variant="ghost"
@@ -89,6 +84,18 @@ export function SelectPaymentOptionPanel({
 					{m.checkout_select_payment_method()}
 				</p>
 			</div>
+			{failed ? (
+				<div aria-live="polite" className="mb-3 text-sm text-destructive">
+					<p>{m.checkout_options_load_failed()}</p>
+					<Button
+						variant="outline"
+						disabled={busy || loading}
+						onClick={onRetry}
+					>
+						{m.checkout_retry()}
+					</Button>
+				</div>
+			) : null}
 			{loading ? (
 				<p className="py-8 text-center text-muted-foreground text-sm">
 					{m.common_loading()}
@@ -112,9 +119,9 @@ export function SelectPaymentOptionPanel({
 									key={value}
 									onClick={() => {
 										setKind(value);
-										setReceivingMethodId("");
-										setPaymentMethodId("");
+										setNetwork("");
 									}}
+									disabled={busy}
 									variant={kind === value ? "default" : "outline"}
 								>
 									{kindIcon(value)}
@@ -129,22 +136,22 @@ export function SelectPaymentOptionPanel({
 								{kindLabel(kind)}
 							</p>
 							<Select
-								disabled={!receivingMethods.length}
-								onValueChange={(value) => {
-									setReceivingMethodId(value);
-									setPaymentMethodId("");
-								}}
-								value={receivingMethodId}
+								disabled={busy || !networks.length}
+								onValueChange={setNetwork}
+								value={network}
 							>
-								<SelectTrigger className="h-12.5 w-full rounded-xl bg-card">
+								<SelectTrigger
+									aria-label={kindLabel(kind)}
+									className="h-12.5 w-full rounded-xl bg-card"
+								>
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent position="popper">
-									{receivingMethods.map((method) => (
+									{networks.map((method) => (
 										<SelectItem key={method.id} value={method.id}>
 											<NetworkLabel
-												displayName={method.name.trim() || method.networkName}
-												network={method.network}
+												displayName={method.name}
+												network={method.id}
 											/>
 										</SelectItem>
 									))}
@@ -156,11 +163,19 @@ export function SelectPaymentOptionPanel({
 								{m.common_currency()}
 							</p>
 							<Select
-								disabled={!assets.length}
-								onValueChange={setPaymentMethodId}
+								disabled={busy || !assets.length}
+								onValueChange={(value) =>
+									setAsset(
+										assets.find((option) => option.paymentMethodId === value)
+											?.asset ?? "",
+									)
+								}
 								value={paymentMethodId}
 							>
-								<SelectTrigger className="h-12.5 w-full rounded-xl bg-card">
+								<SelectTrigger
+									aria-label={m.common_currency()}
+									className="h-12.5 w-full rounded-xl bg-card"
+								>
 									<SelectValue />
 								</SelectTrigger>
 								<SelectContent position="popper">
@@ -180,9 +195,22 @@ export function SelectPaymentOptionPanel({
 							</Select>
 						</div>
 					</div>
+					{selected ? (
+						<div className="mb-4 rounded-xl bg-muted/30 p-3 text-sm">
+							<p className="text-muted-foreground">
+								{m.checkout_estimated_amount()}
+							</p>
+							<p className="font-semibold">
+								{selected.amount} {selected.asset}
+							</p>
+							<p className="mt-1 text-muted-foreground text-xs">
+								{m.checkout_final_amount_hint()}
+							</p>
+						</div>
+					) : null}
 					<Button
 						className="h-12 w-full rounded-xl text-base"
-						disabled={busy || !selected}
+						disabled={busy || loading || failed || !selected}
 						onClick={() => selected && onConfirm(selected)}
 					>
 						{m.common_confirm()}

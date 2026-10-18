@@ -1,6 +1,7 @@
 import { loadCheckoutAmountDecimals } from "#/features/settings/server/system-settings";
 import { quantizeUnitsUp, unitsToDecimal } from "#/lib/money";
 import type { RuntimeDatabase } from "#/server/runtime/types";
+import { readyPaymentConnectionSql } from "./payment-candidates";
 
 export type PaymentAllocationInput = {
 	orderId: string;
@@ -169,7 +170,7 @@ export async function allocateReceivingMethodAndSnapshot(
 			 JOIN payment_rails rail ON rail.code = asset.rail_code
 			 JOIN payment_ingresses connection ON connection.rail_code = asset.rail_code
 			 WHERE rm.id = ? AND asset.id = ? AND rm.enabled = 1 AND rm.target_value != ''
-				 AND connection.enabled = 1
+				 AND ${readyPaymentConnectionSql}
 			 ORDER BY connection.priority, connection.id LIMIT 1`,
 			)
 			.bind(input.receivingMethodId, input.paymentMethodId)
@@ -220,7 +221,9 @@ export async function allocateReceivingMethodAndSnapshot(
 						FROM receiving_methods receiving
 						JOIN receiving_method_assets link ON link.receiving_method_id = receiving.id
 						JOIN payment_assets asset ON asset.id = link.payment_asset_id
-						WHERE receiving.id = ? AND asset.id = ? AND receiving.enabled = 1`,
+						WHERE receiving.id = ? AND asset.id = ? AND receiving.enabled = 1 AND receiving.target_value = ? AND receiving.min_amount_minor IS ? AND receiving.max_amount_minor IS ? AND EXISTS (
+ SELECT 1 FROM payment_rails rail JOIN payment_ingresses connection ON connection.rail_code = rail.code
+ WHERE rail.code = asset.rail_code AND connection.id = ? AND ${readyPaymentConnectionSql})`,
 				)
 				.bind(
 					input.orderId,
@@ -239,6 +242,10 @@ export async function allocateReceivingMethodAndSnapshot(
 					now,
 					input.receivingMethodId,
 					input.paymentMethodId,
+					method.target_value,
+					method.min_amount_minor,
+					method.max_amount_minor,
+					method.connection_id,
 				),
 		);
 	}
@@ -253,7 +260,9 @@ export async function allocateReceivingMethodAndSnapshot(
 					FROM receiving_methods receiving
 					JOIN receiving_method_assets link ON link.receiving_method_id = receiving.id
 					JOIN payment_assets asset ON asset.id = link.payment_asset_id
-					WHERE receiving.id = ? AND asset.id = ? AND receiving.enabled = 1
+					WHERE receiving.id = ? AND asset.id = ? AND receiving.enabled = 1 AND receiving.target_value = ? AND receiving.min_amount_minor IS ? AND receiving.max_amount_minor IS ? AND EXISTS (
+ SELECT 1 FROM payment_rails rail JOIN payment_ingresses connection ON connection.rail_code = rail.code
+ WHERE rail.code = asset.rail_code AND connection.id = ? AND ${readyPaymentConnectionSql})
 					AND (? = 0 OR changes() = 1)
 					`,
 			)
@@ -267,6 +276,10 @@ export async function allocateReceivingMethodAndSnapshot(
 				now,
 				input.receivingMethodId,
 				input.paymentMethodId,
+				method.target_value,
+				method.min_amount_minor,
+				method.max_amount_minor,
+				method.connection_id,
 				input.order ? 1 : 0,
 			),
 	);
@@ -282,8 +295,12 @@ export async function allocateReceivingMethodAndSnapshot(
 					 JOIN receiving_method_assets link ON link.receiving_method_id = receiving.id
 					 JOIN payment_assets asset ON asset.id = link.payment_asset_id
 					 WHERE orders.id = ? AND receiving.id = ? AND asset.id = ? AND orders.version = ?
-					 AND receiving.enabled = 1
+					 AND receiving.enabled = 1 AND receiving.target_value = ? AND receiving.min_amount_minor IS ? AND receiving.max_amount_minor IS ? AND EXISTS (
+ SELECT 1 FROM payment_rails rail JOIN payment_ingresses connection ON connection.rail_code = rail.code
+ WHERE rail.code = asset.rail_code AND connection.id = ? AND ${readyPaymentConnectionSql})
 					 AND orders.status = 'pending' AND orders.received_amount_units = '0'
+ AND orders.provider_order_id IS NULL AND orders.expires_at > ?
+ AND NOT EXISTS (SELECT 1 FROM payment_reviews review WHERE review.order_id = orders.id AND review.status = 'pending')
 					 AND NOT EXISTS (SELECT 1 FROM order_payment_snapshots WHERE order_id = orders.id)
 					 AND NOT EXISTS (SELECT 1 FROM order_payments WHERE order_id = orders.id)
 					 AND EXISTS (SELECT 1 FROM receiving_method_locks WHERE id = ?)`,
@@ -294,6 +311,11 @@ export async function allocateReceivingMethodAndSnapshot(
 					input.receivingMethodId,
 					input.paymentMethodId,
 					input.existingOrder.expectedVersion,
+					method.target_value,
+					method.min_amount_minor,
+					method.max_amount_minor,
+					method.connection_id,
+					now,
 					lockId,
 				),
 		);
@@ -317,7 +339,8 @@ export async function allocateReceivingMethodAndSnapshot(
 					JOIN payment_assets asset ON asset.id = link.payment_asset_id
 					JOIN payment_rails rail ON rail.code = asset.rail_code
 					JOIN payment_ingresses connection ON connection.id = ?
-					WHERE receiving.id = ? AND asset.id = ? AND changes() = 1`,
+					WHERE receiving.id = ? AND asset.id = ? AND changes() = 1
+ AND ${readyPaymentConnectionSql} AND receiving.target_value = ?`,
 			)
 			.bind(
 				input.orderId,
@@ -331,15 +354,36 @@ export async function allocateReceivingMethodAndSnapshot(
 				method.connection_id,
 				input.receivingMethodId,
 				input.paymentMethodId,
+				method.target_value,
 			),
 	);
+	if (input.existingOrder)
+		statements.push(
+			db
+				.prepare(`INSERT INTO audit_logs
+ (id, action, target_type, target_id, before, after, created_at)
+ SELECT ?, 'checkout.receiving_method_selected', 'order', ?, ?, ?, ? WHERE changes() = 1`)
+				.bind(
+					crypto.randomUUID(),
+					input.orderId,
+					JSON.stringify({ receivingMethodId: null }),
+					JSON.stringify({ receivingMethodId: method.id }),
+					now,
+				),
+		);
 	statements.push(
 		db
 			.prepare(
 				`DELETE FROM receiving_method_locks WHERE id = ?
-				 AND NOT EXISTS (SELECT 1 FROM order_payment_snapshots WHERE order_id = ?)`,
+				 AND NOT EXISTS (SELECT 1 FROM order_payment_snapshots WHERE order_id = ? AND receiving_method_id = ? AND asset_id = ? AND expected_amount_units = ?)`,
 			)
-			.bind(lockId, input.orderId),
+			.bind(
+				lockId,
+				input.orderId,
+				input.receivingMethodId,
+				input.paymentMethodId,
+				input.expectedAmountUnits,
+			),
 	);
 	if (input.order)
 		statements.push(
@@ -361,6 +405,17 @@ export async function allocateReceivingMethodAndSnapshot(
 		(results[snapshotIndex]?.meta.changes ?? 0) === 1
 	)
 		return { lockId, receivingMethodId: input.receivingMethodId };
+	// A competing confirmation is an order conflict, not an amount collision.
+	// Stop here so the caller can return the winning immutable snapshot.
+	if (
+		input.existingOrder &&
+		!orderChanged &&
+		(results[lockIndex]?.meta.changes ?? 0) === 1
+	)
+		throw new ReceivingMethodUnavailableError(
+			"The order selection has changed",
+			"not_ready",
+		);
 	if (input.order) {
 		const existing = await db
 			.prepare(
@@ -370,6 +425,28 @@ export async function allocateReceivingMethodAndSnapshot(
 			.first<{ value: number }>();
 		if (existing) throw new PaymentOrderConflictError();
 	}
+	const current = await db
+		.prepare(`SELECT rm.id FROM receiving_methods rm
+ JOIN receiving_method_assets link ON link.receiving_method_id = rm.id
+ JOIN payment_assets asset ON asset.id = link.payment_asset_id
+ JOIN payment_rails rail ON rail.code = asset.rail_code
+ JOIN payment_ingresses connection ON connection.id = ? AND connection.rail_code = rail.code
+ WHERE rm.id = ? AND asset.id = ? AND rm.enabled = 1 AND rm.target_value = ?
+ AND rm.min_amount_minor IS ? AND rm.max_amount_minor IS ? AND ${readyPaymentConnectionSql}`)
+		.bind(
+			method.connection_id,
+			input.receivingMethodId,
+			input.paymentMethodId,
+			method.target_value,
+			method.min_amount_minor,
+			method.max_amount_minor,
+		)
+		.first();
+	if (!current)
+		throw new ReceivingMethodUnavailableError(
+			"Receiving method is not ready",
+			"not_ready",
+		);
 	const unavailable = new ReceivingMethodUnavailableError();
 	unavailable.prepared = { now, reusableAt, method };
 	throw unavailable;

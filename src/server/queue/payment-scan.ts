@@ -110,6 +110,7 @@ export async function handlePaymentScan(
 		return;
 	}
 	let failoverCount = 0;
+	let earliestCooldownMs = Number.POSITIVE_INFINITY;
 	for (const [index, candidate] of candidates.entries()) {
 		if (candidate.connectionId) {
 			const cooldownMs = await paymentConnectionCooldownMs(
@@ -117,10 +118,8 @@ export async function handlePaymentScan(
 				candidate.connectionId,
 			);
 			if (cooldownMs > 0) {
-				message.retry({
-					delaySeconds: Math.max(1, Math.ceil(cooldownMs / 1000)),
-				});
-				return;
+				earliestCooldownMs = Math.min(earliestCooldownMs, cooldownMs);
+				continue;
 			}
 		}
 		const startedAt = performance.now();
@@ -180,10 +179,11 @@ export async function handlePaymentScan(
 					retryDelayMs,
 				);
 			if (kind === "rate_limit") {
-				message.retry({
-					delaySeconds: Math.max(1, Math.ceil((retryDelayMs ?? 30_000) / 1000)),
-				});
-				return;
+				earliestCooldownMs = Math.min(
+					earliestCooldownMs,
+					retryDelayMs ?? 30_000,
+				);
+				continue;
 			}
 			if (!retryable) {
 				await recordPaymentScanIssue(env.DB, message.body, kind);
@@ -207,6 +207,12 @@ export async function handlePaymentScan(
 			candidate.adapter.scanCursor?.(),
 		);
 		message.ack();
+		return;
+	}
+	if (Number.isFinite(earliestCooldownMs)) {
+		message.retry({
+			delaySeconds: Math.max(1, Math.ceil(earliestCooldownMs / 1000)),
+		});
 		return;
 	}
 	await recordPaymentScanIssue(env.DB, message.body, "connections_unavailable");

@@ -80,7 +80,8 @@ export async function quoteWithExchangeRate(
 			adjustment_bps: number;
 			observed_at: number;
 		}>();
-	if (!observed) return null;
+	if (!observed || !/^(0|[1-9]\d*)(\.\d{1,30})?$/.test(observed.rate))
+		return null;
 	if (decimalToUnits(observed.rate, decimalPlaces(observed.rate)) <= 0n)
 		return null;
 	const amountDecimals = decimalPlaces(input.amount);

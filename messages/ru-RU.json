@@ -1091,5 +1091,9 @@
   "webhooks_error_provider_event_not_found": "Событие платежа провайдера не найдено.",
   "webhooks_error_provider_event_not_retryable": "Это событие платежа провайдера нельзя повторить.",
   "webhooks_error_provider_event_retry_in_progress": "Повтор этого события платежа провайдера уже выполняется.",
-  "webhooks_error_provider_event_queue_unavailable": "Очередь событий платежей недоступна."
+  "webhooks_error_provider_event_queue_unavailable": "Очередь событий платежей недоступна.",
+	"checkout_estimated_amount": "Предварительная сумма платежа",
+	"checkout_final_amount_hint": "Оплатите итоговую сумму после подтверждения. При назначении адреса последние цифры суммы могут измениться.",
+	"checkout_options_load_failed": "Не удалось обновить способы оплаты. Повторите попытку.",
+	"checkout_refresh_failed": "Не удалось обновить заказ. Показаны последние полученные платёжные данные."
 }

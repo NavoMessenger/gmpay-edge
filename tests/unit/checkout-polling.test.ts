@@ -40,7 +40,7 @@ describe("checkout polling", () => {
 			"utf8",
 		);
 
-		expect(page).toContain("(!order.token || optionDialogOpen)");
+		expect(page).toContain("!order.token");
 		expect(page).toContain("enabled: shouldLoadPaymentOptions");
 		expect(page).toContain(
 			'queryKey: ["checkout", "payment-options", orderId]',

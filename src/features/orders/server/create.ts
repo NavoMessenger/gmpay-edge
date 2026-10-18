@@ -1,9 +1,14 @@
 import { generateOrderId } from "#/features/orders/order-id";
 import type { CreateOrderInput } from "#/features/orders/schema";
 import type { ApiOrder } from "#/features/orders/server/query";
-import type { ReceivingMethodReadiness } from "#/features/payment-settings/readiness";
-import { isLocallyValidTarget } from "#/features/payment-settings/server/check-method-readiness";
 import {
+	listPaymentCandidates,
+	type PaymentCandidate,
+	quotePaymentCandidates,
+	shuffledPaymentCandidates,
+} from "#/features/payment-settings/server/payment-candidates";
+import {
+	type ExchangeRateQuote,
 	quoteUsdAmountMinor,
 	quoteWithExchangeRate,
 } from "#/features/payment-settings/server/rates";
@@ -15,25 +20,6 @@ import {
 import { decimalToUnits } from "#/lib/money";
 import { currencyDecimals, decimalToMinor } from "#/lib/units";
 import { loadOperationalSettings } from "#/server/operational-settings";
-import type { RuntimeCache } from "#/server/runtime/types";
-
-const paymentRouteCacheTtlSeconds = 30;
-
-type PaymentRouteCandidate = {
-	id: string;
-	target_value: string;
-	min_amount_minor: string | null;
-	max_amount_minor: string | null;
-	payment_method_id: string;
-	code: string;
-	decimals: number;
-	rail_code: string;
-	asset_kind: "native" | "token" | "external";
-	contract_address: string | null;
-	adapter: string | null;
-	default_confirmations: number;
-	connection_id: string | null;
-};
 
 async function createOrderAwaitingReceivingMethod(
 	db: D1Database,
@@ -127,142 +113,39 @@ async function createOrderRecord(
 		return createOrderFromReceivingMethod(db, input, requestUrl, context);
 	if (!(input.paymentAsset && input.paymentNetwork))
 		return createOrderAwaitingReceivingMethod(db, input, requestUrl, context);
-	const methods = await loadPaymentRouteCandidates(
-		db,
-		input.paymentAsset,
-		input.paymentNetwork,
-		context.cache,
-		context.stage,
-	);
+	const methods = await listPaymentCandidates(db, {
+		asset: input.paymentAsset,
+		network: input.paymentNetwork,
+	});
 	context.stage?.("candidate_query");
-	const readyMethods = methods.filter((method) =>
-		isRouteCandidateReady(method),
-	);
-	context.stage?.("readiness");
-	const selectedMethod = pickRandomItem(readyMethods);
-	if (selectedMethod)
-		return createOrderFromReceivingMethod(
-			db,
-			{ ...input, receivingMethodId: selectedMethod.id },
-			requestUrl,
-			context,
-			undefined,
-			selectedMethod,
-		);
-	if (methods.length === 0)
-		throw new OrderServiceError(
-			"receiving_method_not_found",
-			"No receiving method matches the requested asset and rail",
-			422,
-		);
+	const quoted = await quotePaymentCandidates(db, methods, input);
+	for (const { candidate, quote } of shuffledPaymentCandidates(
+		quoted.options,
+	)) {
+		try {
+			return await createOrderFromReceivingMethod(
+				db,
+				{ ...input, receivingMethodId: candidate.id },
+				requestUrl,
+				context,
+				candidate,
+				{ quote, amountUsdMinor: quoted.amountUsdMinor },
+			);
+		} catch (error) {
+			if (
+				!(error instanceof OrderServiceError) ||
+				error.code !== "payment_target_unavailable"
+			)
+				throw error;
+		}
+	}
 	throw new OrderServiceError(
-		"receiving_method_not_ready",
+		methods.length
+			? "receiving_method_not_ready"
+			: "receiving_method_not_found",
 		"No matching receiving method is currently ready",
 		422,
 	);
-}
-
-async function loadPaymentRouteCandidates(
-	db: D1Database,
-	paymentAsset: string,
-	paymentNetwork: string,
-	cache?: RuntimeCache,
-	stage?: (stage: string) => void,
-): Promise<Array<PaymentRouteCandidate>> {
-	const cacheKey = `payment-route:v1:${paymentNetwork}:${paymentAsset}`;
-	if (cache) {
-		try {
-			const cached = await cache.get(cacheKey);
-			const parsed = cached ? JSON.parse(cached) : null;
-			if (
-				Array.isArray(parsed) &&
-				parsed.length > 0 &&
-				parsed.every(isRouteCandidate)
-			) {
-				stage?.("route_cache_hit");
-				return parsed as PaymentRouteCandidate[];
-			}
-		} catch {
-			stage?.("route_cache_fallback");
-			// KV is an optional routing optimisation; D1 remains authoritative.
-		}
-	}
-	stage?.("route_cache_miss");
-	const methods = await db
-		.prepare(
-			`SELECT rm.id, rm.target_value, rm.min_amount_minor, rm.max_amount_minor,
-			 pa.id AS payment_method_id,
-			 pa.code, pa.decimals, pa.kind AS asset_kind, pa.rail_code, pa.contract_address,
-			 pa.default_confirmations, pr.adapter,
-			 (SELECT connection.id FROM payment_ingresses connection
-			  WHERE connection.rail_code = pa.rail_code AND connection.enabled = 1
-			  ORDER BY connection.priority, connection.id LIMIT 1) AS connection_id
-			 FROM receiving_methods rm
-			 JOIN receiving_method_assets link ON link.receiving_method_id = rm.id
-			 JOIN payment_assets pa ON pa.id = link.payment_asset_id
-			 JOIN payment_rails pr ON pr.code = pa.rail_code
-			 WHERE rm.enabled = 1
-			 AND rm.target_value != ''
-			 AND pa.code = ?
-			 AND pa.rail_code = ?
-			 AND EXISTS (SELECT 1 FROM payment_ingresses pc
-				WHERE pc.rail_code = pa.rail_code AND pc.enabled = 1)`,
-		)
-		.bind(paymentAsset, paymentNetwork)
-		.all<PaymentRouteCandidate>();
-	if (cache && methods.results.length) {
-		try {
-			const cacheWrite = cache.put(cacheKey, JSON.stringify(methods.results), {
-				expirationTtl: paymentRouteCacheTtlSeconds,
-			});
-			void cacheWrite
-				.then(() => stage?.("route_cache_write"))
-				.catch(() => stage?.("route_cache_fallback"));
-		} catch {
-			stage?.("route_cache_fallback");
-		}
-	}
-	return methods.results;
-}
-
-function isRouteCandidate(value: unknown): value is PaymentRouteCandidate {
-	if (!value || typeof value !== "object") return false;
-	const candidate = value as Record<string, unknown>;
-	return (
-		typeof candidate.id === "string" &&
-		candidate.id.length > 0 &&
-		typeof candidate.target_value === "string" &&
-		typeof candidate.payment_method_id === "string" &&
-		candidate.payment_method_id.length > 0 &&
-		typeof candidate.code === "string" &&
-		candidate.code.length > 0 &&
-		typeof candidate.decimals === "number" &&
-		typeof candidate.rail_code === "string" &&
-		candidate.rail_code.length > 0 &&
-		(candidate.min_amount_minor === null ||
-			typeof candidate.min_amount_minor === "string") &&
-		(candidate.max_amount_minor === null ||
-			typeof candidate.max_amount_minor === "string") &&
-		(candidate.asset_kind === "native" ||
-			candidate.asset_kind === "token" ||
-			candidate.asset_kind === "external") &&
-		(candidate.contract_address === null ||
-			typeof candidate.contract_address === "string") &&
-		typeof candidate.default_confirmations === "number" &&
-		(typeof candidate.connection_id === "string" ||
-			candidate.connection_id === null)
-	);
-}
-
-function isRouteCandidateReady(method: PaymentRouteCandidate) {
-	if (!method.connection_id) return false;
-	if (method.asset_kind === "token" && !method.contract_address) return false;
-	return isLocallyValidTarget(method.target_value, method.adapter);
-}
-
-function pickRandomItem<T>(items: readonly T[]): T | undefined {
-	if (items.length === 0) return undefined;
-	return items[Math.floor(Math.random() * items.length)];
 }
 
 async function createOrderFromReceivingMethod(
@@ -270,56 +153,21 @@ async function createOrderFromReceivingMethod(
 	input: CreateOrderInput,
 	requestUrl: string,
 	context: OrderCreationContext = {},
-	prevalidatedReadiness?: ReceivingMethodReadiness,
-	routeCandidate?: PaymentRouteCandidate,
+	routeCandidate?: PaymentCandidate,
+	prequoted?: { quote: ExchangeRateQuote; amountUsdMinor: string | null },
 ): Promise<ApiOrder> {
 	const methodId = input.receivingMethodId;
 	if (!methodId) throw new Error("Receiving method is required");
-	const methods = routeCandidate
-		? { results: [routeCandidate] }
-		: await db
-				.prepare(
-					`SELECT rm.id, rm.target_value, rm.min_amount_minor, rm.max_amount_minor,
-					 pa.id AS payment_method_id, pa.default_confirmations,
-					 pa.code, pa.decimals, pa.rail_code, pa.kind AS asset_kind,
-					 pa.contract_address, pr.adapter,
-					 (SELECT connection.id FROM payment_ingresses connection
-					  WHERE connection.rail_code = pa.rail_code AND connection.enabled = 1
-					  ORDER BY connection.priority, connection.id LIMIT 1) AS connection_id
-					 FROM receiving_methods rm
-					 JOIN receiving_method_assets link ON link.receiving_method_id = rm.id
-					 JOIN payment_assets pa ON pa.id = link.payment_asset_id
-					 JOIN payment_rails pr ON pr.code = pa.rail_code
-				 WHERE rm.id = ? ${input.paymentAsset ? "AND pa.code = ?" : ""} ${
-						input.paymentNetwork ? "AND pa.rail_code = ?" : ""
-					}`,
-				)
-				.bind(
-					methodId,
-					...(input.paymentAsset ? [input.paymentAsset] : []),
-					...(input.paymentNetwork ? [input.paymentNetwork] : []),
-				)
-				.all<PaymentRouteCandidate>();
-	const readinessInput = {
-		paymentAsset: input.paymentAsset,
-		paymentNetwork: input.paymentNetwork,
+	const methods = {
+		results: routeCandidate
+			? [routeCandidate]
+			: await listPaymentCandidates(db, {
+					receivingMethodId: methodId,
+					asset: input.paymentAsset,
+					network: input.paymentNetwork,
+				}),
 	};
-	const resolvedReadiness = routeCandidate
-		? (prevalidatedReadiness ?? {
-				receivingMethodId: methodId,
-				ready: true,
-				status: "ready" as const,
-				reasons: [],
-				checkedAt: Date.now(),
-			})
-		: validateMethodCandidateReadiness(methods.results[0], readinessInput);
 	context.stage?.("method_details");
-	if (!resolvedReadiness.ready)
-		throw new OrderServiceError(
-			"receiving_method_not_ready",
-			resolvedReadiness.reasons[0]?.message ?? "Receiving method is not ready",
-			422,
-		);
 	const method =
 		input.paymentAsset || input.paymentNetwork
 			? methods.results.find(
@@ -351,14 +199,17 @@ async function createOrderFromReceivingMethod(
 		paymentAsset: method.code,
 		paymentNetwork: method.rail_code,
 	};
-	const exchangeRateQuoteTask = quoteWithExchangeRate(db, {
-		amount: input.amount,
-		currency: input.currency,
-		paymentAsset: method.code,
-		assetDecimals: method.decimals,
-	});
-	const orderAmountTask =
-		method.min_amount_minor !== null || method.max_amount_minor !== null
+	const exchangeRateQuoteTask = prequoted
+		? Promise.resolve(prequoted.quote)
+		: quoteWithExchangeRate(db, {
+				amount: input.amount,
+				currency: input.currency,
+				paymentAsset: method.code,
+				assetDecimals: method.decimals,
+			});
+	const orderAmountTask = prequoted
+		? Promise.resolve(prequoted.amountUsdMinor)
+		: method.min_amount_minor !== null || method.max_amount_minor !== null
 			? quoteUsdAmountMinor(db, {
 					amount: input.amount,
 					currency: input.currency,
@@ -418,7 +269,6 @@ async function createOrderFromReceivingMethod(
 			immediateReleaseMode: settings.immediateReleaseMode,
 			now,
 			checkoutAmountDecimals: settings.checkoutAmountDecimals,
-			skipLockMaintenance: Boolean(routeCandidate),
 			stage: context.stage,
 			...(exchangeRateQuote
 				? {
@@ -493,112 +343,10 @@ function resolveOrderExpiryMs(
 	return expiresInMs;
 }
 
-function validateMethodCandidateReadiness(
-	method: PaymentRouteCandidate | undefined,
-	expected: { paymentAsset?: string; paymentNetwork?: string },
-): ReceivingMethodReadiness {
-	const checkedAt = Date.now();
-	if (!method) {
-		return {
-			receivingMethodId: "unknown",
-			ready: false,
-			status: "unsupported",
-			reasons: [
-				{
-					code: "METHOD_NOT_FOUND",
-					message: "Receiving method does not exist.",
-				},
-			],
-			checkedAt,
-		};
-	}
-	if (!method.connection_id) {
-		return {
-			receivingMethodId: method.id,
-			ready: false,
-			status: "missing_connection",
-			reasons: [
-				{
-					code: "MISSING_CONNECTION",
-					message: "Configure an enabled payment connection.",
-				},
-			],
-			checkedAt,
-		};
-	}
-	if (
-		method.asset_kind === "token" &&
-		(!method.contract_address || !method.contract_address.trim())
-	) {
-		return {
-			receivingMethodId: method.id,
-			ready: false,
-			status: "unsupported",
-			reasons: [
-				{
-					code: "INVALID_ASSET",
-					message: "The token contract is not configured.",
-				},
-			],
-			checkedAt,
-		};
-	}
-	if (
-		!method.target_value.trim() ||
-		!isLocallyValidTarget(method.target_value, method.adapter)
-	) {
-		return {
-			receivingMethodId: method.id,
-			ready: false,
-			status: "missing_target",
-			reasons: [
-				{
-					code: "INVALID_TARGET",
-					message: "The receiving target is invalid.",
-				},
-			],
-			checkedAt,
-		};
-	}
-	if (expected && !expected.paymentAsset && !expected.paymentNetwork)
-		return {
-			receivingMethodId: method.id,
-			ready: true,
-			status: "ready",
-			reasons: [],
-			checkedAt,
-		};
-	if (
-		(expected.paymentAsset && method.code !== expected.paymentAsset) ||
-		(expected.paymentNetwork && method.rail_code !== expected.paymentNetwork)
-	) {
-		return {
-			receivingMethodId: method.id,
-			ready: false,
-			status: "unsupported",
-			reasons: [
-				{
-					code: "METHOD_NOT_FOUND",
-					message: "Receiving method does not support this route.",
-				},
-			],
-			checkedAt,
-		};
-	}
-	return {
-		receivingMethodId: method.id,
-		ready: true,
-		status: "ready",
-		reasons: [],
-		checkedAt,
-	};
-}
-
 export interface OrderCreationContext {
 	apiKeyId?: string;
 	apiProtocol?: "gmpay" | "epay";
 	stage?: (stage: string) => void;
-	cache?: RuntimeCache;
 }
 
 async function quotePaymentAmount(

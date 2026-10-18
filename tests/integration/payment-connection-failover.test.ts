@@ -254,6 +254,110 @@ describe("payment connection failover", () => {
 		expect(retry).not.toHaveBeenCalled();
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
+	it.each([
+		"cooldown",
+		"rate_limit",
+	] as const)("uses a ready fallback when the primary is in %s", async (mode) => {
+		await db
+			.prepare("UPDATE payment_ingresses SET rate_limited_until = NULL")
+			.run();
+		if (mode === "cooldown")
+			await db
+				.prepare(
+					"UPDATE payment_ingresses SET rate_limited_until = ? WHERE id = 'connection-primary'",
+				)
+				.bind(Date.now() + 60000)
+				.run();
+		const calls: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input);
+				calls.push(url);
+				if (url.includes("primary"))
+					return new Response("limited", {
+						status: 429,
+						headers: { "retry-after": "60" },
+					});
+				const request = JSON.parse(String(init?.body)) as { method: string };
+				if (request.method === "eth_blockNumber") return rpc("0xa");
+				if (request.method === "eth_getBlockByNumber")
+					return rpc({
+						hash: "0xblock",
+						number: "0xa",
+						timestamp: "0x6553f100",
+						transactions: [],
+					});
+				throw new Error(`Unexpected RPC method ${request.method}`);
+			}),
+		);
+		const ack = vi.fn();
+		const retry = vi.fn();
+		try {
+			await handlePaymentScan(
+				{
+					body: {
+						kind: "payment.scan",
+						version: 1,
+						receivingMethodId: "asset-eth",
+						orderId: "order-eth",
+					},
+					ack,
+					retry,
+				} as unknown as Message<
+					import("#/features/payments/types").PaymentScanMessage
+				>,
+				{ DB: db } as Env,
+			);
+			expect(ack).toHaveBeenCalledOnce();
+			expect(retry).not.toHaveBeenCalled();
+			expect(calls.some((url) => url.includes("fallback"))).toBe(true);
+			if (mode === "cooldown")
+				expect(calls.every((url) => url.includes("fallback"))).toBe(true);
+		} finally {
+			await db
+				.prepare("UPDATE payment_ingresses SET rate_limited_until = NULL")
+				.run();
+		}
+	});
+	it("retries at the earliest recovery time when every connection is cooling down", async () => {
+		const now = Date.now();
+		vi.spyOn(Date, "now").mockReturnValue(now);
+		await db
+			.prepare(
+				"UPDATE payment_ingresses SET rate_limited_until = ? + CASE id WHEN 'connection-primary' THEN 60000 ELSE 30000 END",
+			)
+			.bind(now)
+			.run();
+		const fetcher = vi.fn();
+		vi.stubGlobal("fetch", fetcher);
+		const ack = vi.fn();
+		const retry = vi.fn();
+		try {
+			await handlePaymentScan(
+				{
+					body: {
+						kind: "payment.scan",
+						version: 1,
+						receivingMethodId: "asset-eth",
+						orderId: "order-eth",
+					},
+					ack,
+					retry,
+				} as unknown as Message<
+					import("#/features/payments/types").PaymentScanMessage
+				>,
+				{ DB: db } as Env,
+			);
+			expect(fetcher).not.toHaveBeenCalled();
+			expect(ack).not.toHaveBeenCalled();
+			expect(retry).toHaveBeenCalledWith({ delaySeconds: 30 });
+		} finally {
+			await db
+				.prepare("UPDATE payment_ingresses SET rate_limited_until = NULL")
+				.run();
+		}
+	});
 });
 
 async function seed(db: D1Database) {

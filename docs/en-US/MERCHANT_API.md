@@ -14,6 +14,14 @@ in place: the PID remains stable and every later delivery uses the new Secret.
 Grant `orders:create` for transaction creation and `orders:read` for queries.
 Scopes are checked independently and fail closed when stored scope data is invalid.
 
+### Checkout networks and address allocation
+
+The checkout groups available methods by network and asset. Operator-defined receiving address names and candidate IDs are not selection inputs. A network appears only when an enabled receiving method has a valid target, supports the asset and order limits, has a usable quote, and has a healthy enabled HTTP connection for chain payments. Exchange and wallet methods keep their provider readiness checks. The merchant payment-options API retains its existing response fields.
+
+Confirming a network and asset randomly allocates an eligible address on the server, with bounded amount-collision retries and fallback to other eligible addresses. The preview is an estimate; pay the final amount and address shown after confirmation. The database atomically commits the immutable payment snapshot, amount lock, and checkout selection audit. Repeated confirmation of the same selection returns the existing snapshot; a different selection cannot replace it.
+
+Transient status refresh failures retain the latest known payment details and offer retry with polling backoff. A successful selection or transaction submission remains successful if its subsequent refresh fails.
+
 ## GMPay create transaction
 
 To quote available receiving methods before creating an order, send a signed `GET /payments/gmpay/v1/order/payment-options` with `pid`, `currency`, `amount`, and `signature`. It requires `orders:create` scope and returns `data` entries containing `receiving_method_id`, `token`, `network`, `network_name`, and decimal-string `actual_amount`. A quote does not reserve an amount or create an order; availability and the final amount are decided during creation.

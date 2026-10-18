@@ -1091,5 +1091,9 @@
   "webhooks_error_provider_event_not_found": "プロバイダー決済イベントが見つかりません。",
   "webhooks_error_provider_event_not_retryable": "このプロバイダー決済イベントは再試行できません。",
   "webhooks_error_provider_event_retry_in_progress": "このプロバイダー決済イベントは既に再試行中です。",
-  "webhooks_error_provider_event_queue_unavailable": "決済イベントキューを利用できません。"
+  "webhooks_error_provider_event_queue_unavailable": "決済イベントキューを利用できません。",
+	"checkout_estimated_amount": "支払数量の目安",
+	"checkout_final_amount_hint": "確定後に表示される最終数量でお支払いください。アドレスの割り当てにより末尾の金額が調整される場合があります。",
+	"checkout_options_load_failed": "支払い方法を更新できませんでした。再試行してください。",
+	"checkout_refresh_failed": "注文を更新できません。前回取得した支払い情報を表示しています。"
 }

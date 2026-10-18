@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { CodeXml, MessageCircle } from "lucide-react";
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useSiteBrand } from "#/context/site-brand-provider";
 import {
@@ -52,28 +52,39 @@ export function CheckoutPage({
 	const [order, setOrder] = useState<CheckoutOrder | null>(initialOrder);
 	const [txHash, setTxHash] = useState("");
 	const [submittingTxHash, setSubmittingTxHash] = useState(false);
-	const [optionDialogOpen, setOptionDialogOpen] = useState(false);
 	const [selectingOption, setSelectingOption] = useState(false);
 	const [pollFailed, setPollFailed] = useState(false);
-	const now = useNow(initialNow, true);
 	const statusDetail = order?.status_detail;
-	const refreshOrder = useCallback(async () => {
+	const now = useNow(initialNow, !isTerminal(statusDetail));
+	const selectionInFlight = useRef(false);
+	const pollingEnabled = Boolean(order && !isTerminal(statusDetail));
+	const { pollAfterCurrent, pollNow, markSuccess, markFailure } =
+		useVisiblePolling(refreshOrder, 5_000, pollingEnabled);
+	function updateOrder(next: CheckoutOrder | null) {
+		setOrder((current) =>
+			current &&
+			next &&
+			current.version !== undefined &&
+			next.version !== undefined &&
+			current.version > next.version
+				? current
+				: next,
+		);
+	}
+	async function refreshOrder() {
 		try {
-			setOrder(await getCheckoutOrderFn({ data: { orderId } }));
+			const next = await getCheckoutOrderFn({ data: { orderId } });
+			updateOrder(next);
 			setPollFailed(false);
+			markSuccess();
 		} catch (error) {
 			setPollFailed(true);
+			markFailure();
 			throw error;
 		}
-	}, [orderId]);
-	const pollingEnabled = Boolean(order && !isTerminal(statusDetail));
-	const { pollAfterCurrent, pollNow } = useVisiblePolling(
-		refreshOrder,
-		5_000,
-		pollingEnabled,
-	);
+	}
 	const shouldLoadPaymentOptions = Boolean(
-		order && !isTerminal(statusDetail) && (!order.token || optionDialogOpen),
+		order && !isTerminal(statusDetail) && !order.token,
 	);
 	const paymentOptionsQuery = useQuery({
 		queryKey: ["checkout", "payment-options", orderId],
@@ -136,7 +147,7 @@ export function CheckoutPage({
 	}, [returnUrl]);
 
 	let content: React.ReactNode;
-	if (pollFailed) {
+	if (pollFailed && !order) {
 		content = (
 			<TimeoutPanel
 				onBack={() => navigate({ to: "/" })}
@@ -203,6 +214,10 @@ export function CheckoutPage({
 				<SelectPaymentOptionPanel
 					busy={selectingOption}
 					loading={paymentOptionsQuery.isLoading}
+					failed={paymentOptionsQuery.isError}
+					onRetry={() => {
+						void paymentOptionsQuery.refetch();
+					}}
 					onConfirm={(option) => selectPaymentOption(option)}
 					options={paymentOptions?.options ?? []}
 					unavailableReason={paymentOptions?.unavailableReason}
@@ -211,16 +226,7 @@ export function CheckoutPage({
 		);
 	} else {
 		const activeNetworkDisplayName = networkName(order.network);
-		content = optionDialogOpen ? (
-			<SelectPaymentOptionPanel
-				busy={selectingOption}
-				loading={paymentOptionsQuery.isLoading}
-				onBack={() => setOptionDialogOpen(false)}
-				onConfirm={(option) => selectPaymentOption(option)}
-				options={paymentOptions?.options ?? []}
-				unavailableReason={paymentOptions?.unavailableReason}
-			/>
-		) : (
+		content = (
 			<>
 				<StepProgress panel="payment" totalSteps={2} />
 				<OrderSummaryCard
@@ -233,7 +239,6 @@ export function CheckoutPage({
 				/>
 				<PaymentDetailsPanel
 					onCopyAddress={() => copyText(order.receive_address ?? "")}
-					onChangePaymentOption={() => setOptionDialogOpen(true)}
 					onSubmitTxHash={async () => {
 						if (!txHash.trim()) {
 							toast.error(m.checkout_tx_hash_required());
@@ -249,7 +254,7 @@ export function CheckoutPage({
 								return false;
 							}
 							toast.success(m.checkout_tx_hash_submitted());
-							await pollAfterCurrent();
+							void pollAfterCurrent().catch(() => undefined);
 							return true;
 						} catch {
 							toast.error(m.common_request_failed());
@@ -268,9 +273,6 @@ export function CheckoutPage({
 					}
 					paymentFlow="chain"
 					remaining={remaining}
-					showChangePaymentOption={Boolean(
-						paymentOptions?.selectable && paymentOptions.options.length > 1,
-					)}
 					showTxHashSubmit={!order.payment_url}
 					showReviewSubmit={!order.payment_url}
 					submittingTxHash={submittingTxHash}
@@ -289,24 +291,28 @@ export function CheckoutPage({
 	}
 
 	async function selectPaymentOption(option: {
-		receivingMethodId: string;
+		network: string;
 		paymentMethodId: string;
 	}) {
+		if (selectionInFlight.current) return;
+		selectionInFlight.current = true;
 		setSelectingOption(true);
 		try {
-			await selectCheckoutPaymentOptionFn({
+			const result = await selectCheckoutPaymentOptionFn({
 				data: {
 					orderId,
-					receivingMethodId: option.receivingMethodId,
+					network: option.network,
 					paymentMethodId: option.paymentMethodId,
 				},
 			});
-			await Promise.all([pollAfterCurrent(), paymentOptionsQuery.refetch()]);
-			setOptionDialogOpen(false);
+			updateOrder(result.order);
 			toast.success(m.checkout_payment_option_changed());
+			void pollAfterCurrent().catch(() => undefined);
 		} catch {
 			toast.error(m.checkout_payment_option_failed());
+			void paymentOptionsQuery.refetch();
 		} finally {
+			selectionInFlight.current = false;
 			setSelectingOption(false);
 		}
 	}
@@ -334,7 +340,26 @@ export function CheckoutPage({
 						<ThemeSwitch />
 					</div>
 				</header>
-				<div className="flex-1">{content}</div>
+				<div className="flex-1">
+					{pollFailed && order ? (
+						<div
+							aria-live="polite"
+							className="mb-3 rounded-xl border p-3 text-sm"
+						>
+							<p>{m.checkout_refresh_failed()}</p>
+							<button
+								className="mt-1 underline"
+								type="button"
+								onClick={() => {
+									void pollNow().catch(() => undefined);
+								}}
+							>
+								{m.checkout_retry()}
+							</button>
+						</div>
+					) : null}
+					{content}
+				</div>
 				{brand.supportUrl ? (
 					<a
 						aria-label={m.checkout_customer_service()}

@@ -1091,5 +1091,9 @@
   "webhooks_error_provider_event_not_found": "공급자 결제 이벤트를 찾을 수 없습니다.",
   "webhooks_error_provider_event_not_retryable": "이 공급자 결제 이벤트는 다시 시도할 수 없습니다.",
   "webhooks_error_provider_event_retry_in_progress": "이 공급자 결제 이벤트는 이미 다시 시도 중입니다.",
-  "webhooks_error_provider_event_queue_unavailable": "결제 이벤트 큐를 사용할 수 없습니다."
+  "webhooks_error_provider_event_queue_unavailable": "결제 이벤트 큐를 사용할 수 없습니다.",
+	"checkout_estimated_amount": "예상 결제 수량",
+	"checkout_final_amount_hint": "확인 후 표시되는 최종 수량으로 결제하세요. 주소 할당 시 금액의 끝자리가 조정될 수 있습니다.",
+	"checkout_options_load_failed": "결제 옵션을 새로 고칠 수 없습니다. 다시 시도하세요.",
+	"checkout_refresh_failed": "주문을 새로 고칠 수 없습니다. 마지막으로 가져온 결제 정보가 표시됩니다."
 }

@@ -10,6 +10,7 @@ export type CheckoutPanelState =
 export type PaymentFlowKind = "chain" | "okpay";
 export interface CheckoutOrder {
 	trade_id: string;
+	version?: number;
 	external_order_id?: string;
 	amount: string;
 	actual_amount?: string;

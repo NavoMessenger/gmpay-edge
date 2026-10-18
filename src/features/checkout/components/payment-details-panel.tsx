@@ -1,11 +1,4 @@
-import {
-	ArrowLeftRight,
-	Check,
-	ExternalLink,
-	LoaderCircle,
-	Send,
-	Timer,
-} from "lucide-react";
+import { Check, ExternalLink, LoaderCircle, Send, Timer } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useState } from "react";
 import { Input } from "#/components/pro/base/fields/input";
@@ -33,13 +26,11 @@ const TIMER_CIRCUMFERENCE = 2 * Math.PI * 20;
 
 export function PaymentDetailsPanel({
 	onCopyAddress,
-	onChangePaymentOption,
 	onSubmitTxHash,
 	onTxHashChange,
 	order,
 	paymentFlow,
 	remaining,
-	showChangePaymentOption,
 	showTxHashSubmit,
 	showReviewSubmit,
 	submittingTxHash,
@@ -50,13 +41,11 @@ export function PaymentDetailsPanel({
 	onReviewSubmitted,
 }: {
 	onCopyAddress: () => boolean | undefined | Promise<boolean | undefined>;
-	onChangePaymentOption: () => void;
 	onSubmitTxHash: () => Promise<boolean>;
 	onTxHashChange: (value: string) => void;
 	order?: CheckoutOrder;
 	paymentFlow?: PaymentFlowKind;
 	remaining: number;
-	showChangePaymentOption: boolean;
 	showTxHashSubmit: boolean;
 	showReviewSubmit: boolean;
 	submittingTxHash: boolean;
@@ -181,17 +170,7 @@ export function PaymentDetailsPanel({
 					<CopyIconButton className="mt-0.5" onClick={onCopyAddress} />
 				</div>
 			</div>
-			{showChangePaymentOption ? (
-				<Button
-					className="mb-3 h-12 w-full rounded-xl text-base"
-					onClick={onChangePaymentOption}
-					type="button"
-					variant="outline"
-				>
-					<ArrowLeftRight />
-					{m.checkout_change_payment_asset()}
-				</Button>
-			) : null}
+
 			{showTxHashSubmit ? (
 				<Dialog onOpenChange={setTxHashDialogOpen} open={txHashDialogOpen}>
 					<DialogTrigger asChild>

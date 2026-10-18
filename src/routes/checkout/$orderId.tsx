@@ -15,6 +15,7 @@ function CheckoutRoute() {
 	const { order, renderedAt } = Route.useLoaderData();
 	return (
 		<CheckoutPage
+			key={orderId}
 			initialNow={renderedAt}
 			initialOrder={order}
 			orderId={orderId}

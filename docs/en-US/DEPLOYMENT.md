@@ -127,6 +127,12 @@ For backups, restores, and D1/R2 migration, follow
 [Bun data operations](NODE_DATA_OPERATIONS.md) and use the maintained `data`
 package script with its `backup`, `restore`, and `import-cloudflare` subcommands.
 
+### Checkout flow acceptance
+
+With two enabled receiving addresses on each of two healthy networks, verify that checkout shows two network choices with their supported assets. Disable a network connection or address between listing and confirmation and verify authoritative rejection or another eligible address allocation. Check the final payable amount, repeated and concurrent confirmations, and recovery after a failed status refresh in both themes on desktop and mobile. This change requires no new SQL migration.
+
+Payment scanning skips cooling connections and uses a ready fallback. If every connection is cooling down, the Queue message retries at the earliest recovery time. Verify this with deterministic fixtures; live provider and merchant callback acceptance remains an operator task.
+
 ## Cloudflare resources
 
 - [ ] Configure at least one provider under **Admin → Email delivery**. To use Cloudflare Email, bind Email Routing as `EMAIL` and confirm that the Workers-only provider appears. Send a live recovery email and confirm the 15-minute link works; the sign-in page deliberately returns a generic response when delivery is unavailable.

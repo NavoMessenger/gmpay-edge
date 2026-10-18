@@ -1091,5 +1091,9 @@
 	"webhooks_error_provider_event_not_found": "未找到服务商支付事件。",
 	"webhooks_error_provider_event_not_retryable": "该服务商支付事件不能重试。",
 	"webhooks_error_provider_event_retry_in_progress": "该服务商支付事件正在重试。",
-	"webhooks_error_provider_event_queue_unavailable": "支付事件队列暂不可用。"
+	"webhooks_error_provider_event_queue_unavailable": "支付事件队列暂不可用。",
+	"checkout_estimated_amount": "预计支付数量",
+	"checkout_final_amount_hint": "请按确认后显示的最终数量付款，地址分配可能调整末位金额。",
+	"checkout_options_load_failed": "暂时无法刷新支付选项，请重试。",
+	"checkout_refresh_failed": "暂时无法刷新订单，当前保留上次获取的付款信息。"
 }
