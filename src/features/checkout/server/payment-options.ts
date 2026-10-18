@@ -258,6 +258,7 @@ export async function selectCheckoutPaymentOption(
 			: order.expires_at + settings.reorgMonitorMs,
 		immediateReleaseMode: settings.immediateReleaseMode,
 		now,
+		checkoutAmountDecimals: settings.checkoutAmountDecimals,
 		rate: {
 			source: quote.source,
 			raw: quote.rawRate,

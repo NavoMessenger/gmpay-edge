@@ -3,6 +3,7 @@ export {
 	handlePaymentScan,
 	processScannedTransactions,
 	refreshPendingPaymentTransactions,
+	scanTransactions,
 } from "#/server/queue/payment-scan";
 export {
 	handleQueue,

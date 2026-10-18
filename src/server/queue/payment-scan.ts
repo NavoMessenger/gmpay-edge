@@ -11,6 +11,7 @@ import type {
 	NormalizedTransaction,
 	PaymentAdapter,
 } from "#/integrations/chains/types";
+import { providerRetryDelayMs } from "#/integrations/provider-errors";
 import {
 	isObservedProviderAdapter,
 	providerOperationDurationMs,
@@ -18,15 +19,28 @@ import {
 } from "#/integrations/provider-observability";
 import type { RuntimeConfig } from "#/server/runtime-config";
 
+const scannableOrderStatuses = new Set([
+	"pending",
+	"confirming",
+	"partially_paid",
+	"paid",
+	"overpaid",
+]);
+
 export async function handlePaymentScan(
 	message: Message<PaymentScanMessage>,
 	env: Env,
 	runtime?: RuntimeConfig,
 	adapterCache?: Map<string, ReceivingAdaptersPromise>,
+	discoveryCache?: PaymentDiscoveryCache,
+	transactionCache?: PaymentTransactionCache,
 ): Promise<void> {
 	const payment = await env.DB.prepare(
 		`SELECT ops.asset_code, ops.target_value, o.provider_order_id,
-		 o.payment_scan_cursor
+		 o.payment_scan_cursor, o.status, o.created_at,
+		 EXISTS(SELECT 1 FROM order_payments op
+		  WHERE op.order_id = o.id AND op.status IN ('detected','confirming'))
+		  AS has_unsettled_payments
 		 FROM order_payment_snapshots ops
 		 JOIN orders o ON o.id = ops.order_id
 		 WHERE ops.order_id = ? AND ops.receiving_method_id = ? LIMIT 1`,
@@ -37,8 +51,21 @@ export async function handlePaymentScan(
 			target_value: string;
 			provider_order_id: string | null;
 			payment_scan_cursor: string | null;
+			status: string;
+			created_at: number;
+			has_unsettled_payments: number;
 		}>();
 	if (!payment) {
+		message.ack();
+		return;
+	}
+	// Re-check eligibility at consumption time because the order or its payments
+	// may have reached a terminal state after this message was queued.
+	if (
+		!scannableOrderStatuses.has(payment.status) ||
+		((payment.status === "paid" || payment.status === "overpaid") &&
+			payment.has_unsettled_payments === 0)
+	) {
 		message.ack();
 		return;
 	}
@@ -51,6 +78,8 @@ export async function handlePaymentScan(
 		...(payment.payment_scan_cursor
 			? { sinceBlock: payment.payment_scan_cursor }
 			: {}),
+		sinceTimestamp: new Date(payment.created_at),
+		refreshOnly: payment.status === "paid" || payment.status === "overpaid",
 	};
 	let candidates: Awaited<ReturnType<typeof createReceivingMethodAdapters>>;
 	try {
@@ -82,6 +111,18 @@ export async function handlePaymentScan(
 	}
 	let failoverCount = 0;
 	for (const [index, candidate] of candidates.entries()) {
+		if (candidate.connectionId) {
+			const cooldownMs = await paymentConnectionCooldownMs(
+				env.DB,
+				candidate.connectionId,
+			);
+			if (cooldownMs > 0) {
+				message.retry({
+					delaySeconds: Math.max(1, Math.ceil(cooldownMs / 1000)),
+				});
+				return;
+			}
+		}
 		const startedAt = performance.now();
 		let transactions: NormalizedTransaction[];
 		try {
@@ -91,6 +132,16 @@ export async function handlePaymentScan(
 				payment.asset_code,
 				candidate.adapter,
 				candidate.subscription,
+				discoveryCache,
+				JSON.stringify([
+					candidate.connectionId,
+					candidate.adapter.network,
+					scan.address,
+					payment.asset_code,
+					scan.providerOrderId ?? null,
+				]),
+				transactionCache,
+				candidate.connectionId,
 			);
 			if (isObservedProviderAdapter(candidate.adapter.id))
 				recordProviderOperation({
@@ -104,6 +155,10 @@ export async function handlePaymentScan(
 				});
 		} catch (error) {
 			const kind = candidate.adapter.classifyError(error);
+			const retryDelayMs =
+				kind === "rate_limit"
+					? providerRetryDelayMs(error, message.attempts)
+					: undefined;
 			const retryable = candidate.adapter.isRetryable(kind);
 			const willFailover = retryable && index < candidates.length - 1;
 			if (willFailover) failoverCount += 1;
@@ -122,7 +177,14 @@ export async function handlePaymentScan(
 					env.DB,
 					candidate.connectionId,
 					kind,
+					retryDelayMs,
 				);
+			if (kind === "rate_limit") {
+				message.retry({
+					delaySeconds: Math.max(1, Math.ceil((retryDelayMs ?? 30_000) / 1000)),
+				});
+				return;
+			}
 			if (!retryable) {
 				await recordPaymentScanIssue(env.DB, message.body, kind);
 				message.ack();
@@ -138,7 +200,12 @@ export async function handlePaymentScan(
 			transactions,
 			runtime,
 		);
-		await advancePaymentScanCursor(env.DB, message.body.orderId, transactions);
+		await advancePaymentScanCursor(
+			env.DB,
+			message.body.orderId,
+			transactions,
+			candidate.adapter.scanCursor?.(),
+		);
 		message.ack();
 		return;
 	}
@@ -150,6 +217,20 @@ type ReceivingAdaptersPromise = ReturnType<
 	typeof createReceivingMethodAdapters
 >;
 
+export type PaymentDiscoveryCache = Map<
+	string,
+	{
+		sinceBlock?: bigint;
+		sinceTimestamp?: number;
+		transactions: Promise<NormalizedTransaction[]>;
+	}
+>;
+
+export type PaymentTransactionCache = Map<
+	string,
+	Promise<NormalizedTransaction | null>
+>;
+
 export async function scanTransactions(
 	db: D1Database,
 	message: AuthoritativePaymentScan,
@@ -159,12 +240,16 @@ export async function scanTransactions(
 		connectionId: string;
 		adapter: PaymentAdapter<unknown>;
 	},
+	discoveryCache?: PaymentDiscoveryCache,
+	discoveryKey?: string,
+	transactionCache?: PaymentTransactionCache,
+	connectionId?: string,
 ) {
 	const pushed: NormalizedTransaction[] = [];
 	const subscriptionAdapter = subscription?.adapter ?? adapter;
 	const subscriptionController = new AbortController();
 	let subscriptionTask: Promise<void> | undefined;
-	if (subscriptionAdapter.subscribeTransactions) {
+	if (!message.refreshOnly && subscriptionAdapter.subscribeTransactions) {
 		// WSS connections are opt-in and consumed for a bounded queue-task
 		// window. They run alongside the authoritative HTTP poll rather than
 		// adding a fixed delay after it. A dropped socket cannot lose a payment.
@@ -194,27 +279,64 @@ export async function scanTransactions(
 			});
 	}
 	try {
-		const discovered = message.providerOrderId
-			? [
-					await adapter.getTransaction(message.providerOrderId, {
+		const discover = async () =>
+			message.providerOrderId
+				? [
+						await adapter.getTransaction(message.providerOrderId, {
+							address: message.address,
+							assetCode,
+						}),
+					].filter(
+						(transaction): transaction is NonNullable<typeof transaction> =>
+							transaction !== null,
+					)
+				: await adapter.findTransactions({
 						address: message.address,
 						assetCode,
-					}),
-				].filter(
-					(transaction): transaction is NonNullable<typeof transaction> =>
-						transaction !== null,
+						...(message.sinceBlock
+							? { sinceBlock: BigInt(message.sinceBlock) }
+							: {}),
+						...(message.sinceTimestamp
+							? { sinceTimestamp: message.sinceTimestamp }
+							: {}),
+					});
+		const requestedSinceBlock = message.sinceBlock
+			? BigInt(message.sinceBlock)
+			: undefined;
+		const requestedSinceTimestamp = message.sinceTimestamp?.getTime();
+		const cachedDiscovery =
+			discoveryKey && discoveryCache
+				? discoveryCache.get(discoveryKey)
+				: undefined;
+		let discovered: NormalizedTransaction[] = [];
+		if (!message.refreshOnly) {
+			let discoveredPromise =
+				cachedDiscovery &&
+				coversScanRange(
+					cachedDiscovery.sinceBlock,
+					requestedSinceBlock,
+					cachedDiscovery.sinceTimestamp,
+					requestedSinceTimestamp,
 				)
-			: await adapter.findTransactions({
-					address: message.address,
-					assetCode,
-					...(message.sinceBlock
-						? { sinceBlock: BigInt(message.sinceBlock) }
-						: {}),
-				});
+					? cachedDiscovery.transactions
+					: undefined;
+			if (!discoveredPromise) {
+				discoveredPromise = discover();
+				if (discoveryKey && discoveryCache)
+					discoveryCache.set(discoveryKey, {
+						sinceBlock: requestedSinceBlock,
+						sinceTimestamp: requestedSinceTimestamp,
+						transactions: discoveredPromise,
+					});
+			}
+			discovered = await discoveredPromise;
+		}
 		const pending = await refreshPendingPaymentTransactions(
 			db,
 			message.orderId,
 			adapter,
+			transactionCache,
+			connectionId,
 		);
 		return mergeScannedTransactions(discovered, pushed, pending);
 	} finally {
@@ -223,16 +345,35 @@ export async function scanTransactions(
 	}
 }
 
+function coversScanRange(
+	cachedBlock?: bigint,
+	requestedBlock?: bigint,
+	cachedTimestamp?: number,
+	requestedTimestamp?: number,
+) {
+	const coversBlock =
+		cachedBlock == null ||
+		(requestedBlock != null && cachedBlock <= requestedBlock);
+	const coversTimestamp =
+		cachedTimestamp == null ||
+		(requestedTimestamp != null && cachedTimestamp <= requestedTimestamp);
+	return coversBlock && coversTimestamp;
+}
+
 type AuthoritativePaymentScan = PaymentScanMessage & {
 	address: string;
 	providerOrderId?: string;
 	sinceBlock?: string;
+	sinceTimestamp?: Date;
+	refreshOnly?: boolean;
 };
 
 export async function refreshPendingPaymentTransactions(
 	db: D1Database,
 	orderId: string,
 	adapter: PaymentAdapter<unknown>,
+	transactionCache?: PaymentTransactionCache,
+	connectionId?: string,
 ) {
 	const rows = await db
 		.prepare(
@@ -241,7 +382,7 @@ export async function refreshPendingPaymentTransactions(
 			 bt.block_hash, bt.confirmations, bt.status, bt.observed_at
 			 FROM order_payments op JOIN blockchain_transactions bt
 			 ON op.transaction_id = bt.network || ':' || bt.tx_hash || ':' || bt.event_index
-			 WHERE op.order_id = ? AND op.status IN ('detected', 'confirming', 'confirmed')`,
+			 WHERE op.order_id = ? AND op.status IN ('detected', 'confirming')`,
 		)
 		.bind(orderId)
 		.all<{
@@ -275,7 +416,20 @@ export async function refreshPendingPaymentTransactions(
 			success: true,
 			canonical: true,
 		};
-		const current = await findCurrentTransactionEvent(adapter, stored);
+		const cacheKey = JSON.stringify([
+			connectionId ?? adapter.id,
+			stored.network,
+			stored.hash,
+			stored.eventIndex,
+		]);
+		let currentPromise = transactionCache?.get(cacheKey);
+		if (!currentPromise) {
+			currentPromise = findCurrentTransactionEvent(adapter, stored).then(
+				(transaction) => transaction ?? null,
+			);
+			transactionCache?.set(cacheKey, currentPromise);
+		}
+		const current = (await currentPromise) ?? undefined;
 		if (current) {
 			if (row.status === "missing")
 				await db
@@ -339,12 +493,13 @@ export async function advancePaymentScanCursor(
 	db: D1Database,
 	orderId: string,
 	transactions: Array<{ blockNumber: bigint }>,
+	scannedThrough?: bigint,
 ) {
-	if (!transactions.length) return null;
+	if (!transactions.length && scannedThrough == null) return null;
 	const cursor = transactions.reduce(
 		(maximum, transaction) =>
 			transaction.blockNumber > maximum ? transaction.blockNumber : maximum,
-		0n,
+		scannedThrough ?? 0n,
 	);
 	await db
 		.prepare(
@@ -419,16 +574,49 @@ export async function recordPaymentScanObservation(
 	db: D1Database,
 	connectionId: string,
 	errorCode: string | null,
+	retryAfterMs?: number,
 ) {
+	const now = Date.now();
+	const rateLimited = errorCode === "rate_limit";
 	await db
 		.prepare(
 			`UPDATE payment_ingresses SET last_payment_scan_at = ?,
-				 last_payment_scan_error_code = ?, updated_at = ? WHERE id = ?
+				 last_payment_scan_error_code = ?,
+				 rate_limited_until = CASE WHEN ? THEN ? ELSE NULL END,
+				 consecutive_rate_limits = CASE WHEN ? THEN consecutive_rate_limits + 1 ELSE 0 END,
+				 last_retry_after_ms = CASE WHEN ? THEN ? ELSE NULL END,
+				 last_provider_success_at = CASE WHEN ? IS NULL THEN ? ELSE last_provider_success_at END,
+				 updated_at = ? WHERE id = ?
 				 AND EXISTS (
 				  SELECT 1 FROM payment_rails rail
 				  WHERE rail.code = payment_ingresses.rail_code AND rail.kind = 'chain'
 				 )`,
 		)
-		.bind(Date.now(), errorCode, Date.now(), connectionId)
+		.bind(
+			now,
+			errorCode,
+			rateLimited,
+			rateLimited ? now + (retryAfterMs ?? 30_000) : null,
+			rateLimited,
+			rateLimited,
+			retryAfterMs ?? null,
+			errorCode,
+			now,
+			now,
+			connectionId,
+		)
 		.run();
+}
+
+async function paymentConnectionCooldownMs(
+	db: D1Database,
+	connectionId: string,
+) {
+	const row = await db
+		.prepare(
+			"SELECT rate_limited_until FROM payment_ingresses WHERE id = ? LIMIT 1",
+		)
+		.bind(connectionId)
+		.first<{ rate_limited_until: number | null }>();
+	return Math.max(0, (row?.rate_limited_until ?? 0) - Date.now());
 }

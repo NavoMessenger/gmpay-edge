@@ -76,6 +76,7 @@ export class EvmAdapter implements PaymentAdapter<EvmConfig> {
 	readonly id = "evm";
 	readonly configSchema = configSchema;
 	readonly config: EvmConfig;
+	private lastScanCursor?: bigint;
 	readonly network: Network;
 
 	constructor(config: unknown) {
@@ -134,23 +135,27 @@ export class EvmAdapter implements PaymentAdapter<EvmConfig> {
 		counters: ProviderOperationCounters,
 	): Promise<NormalizedTransaction | null> {
 		const deadlineAt = operationDeadline(this.config.timeoutMs);
-		const [rawTransaction, rawReceipt, latestHex] = await Promise.all([
-			this.rpc<unknown>(
-				"eth_getTransactionByHash",
-				[hash],
-				deadlineAt,
-				undefined,
-				counters,
-			),
-			this.rpc<unknown>(
-				"eth_getTransactionReceipt",
-				[hash],
-				deadlineAt,
-				undefined,
-				counters,
-			),
-			this.rpc<string>("eth_blockNumber", [], deadlineAt, undefined, counters),
-		]);
+		const rawTransaction = await this.rpc<unknown>(
+			"eth_getTransactionByHash",
+			[hash],
+			deadlineAt,
+			undefined,
+			counters,
+		);
+		const rawReceipt = await this.rpc<unknown>(
+			"eth_getTransactionReceipt",
+			[hash],
+			deadlineAt,
+			undefined,
+			counters,
+		);
+		const latestHex = await this.rpc<string>(
+			"eth_blockNumber",
+			[],
+			deadlineAt,
+			undefined,
+			counters,
+		);
 		if (rawTransaction == null || rawReceipt == null) return null;
 		const transaction = transactionSchema.parse(rawTransaction);
 		const receipt = receiptSchema.parse(rawReceipt);
@@ -224,6 +229,7 @@ export class EvmAdapter implements PaymentAdapter<EvmConfig> {
 				counters,
 			),
 		);
+		this.lastScanCursor = BigInt(latest);
 		const earliest = Math.max(0, latest - this.config.blockLookback + 1);
 		if (input.sinceBlock != null) {
 			if (input.sinceBlock > BigInt(latest)) return [];
@@ -251,6 +257,9 @@ export class EvmAdapter implements PaymentAdapter<EvmConfig> {
 			deadlineAt,
 			counters,
 		);
+	}
+	scanCursor() {
+		return this.lastScanCursor;
 	}
 	async getConfirmations(transaction: NormalizedTransaction) {
 		return observeProviderOperation(

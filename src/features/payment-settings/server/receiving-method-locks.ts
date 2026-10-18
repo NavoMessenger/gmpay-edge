@@ -6,6 +6,7 @@ export type PaymentAllocationInput = {
 	orderId: string;
 	receivingMethodId: string;
 	paymentMethodId: string;
+	checkoutAmountDecimals?: number;
 	expectedAmountUnits: string;
 	orderAmountUsdMinor?: string;
 	expiresAt: number;
@@ -20,6 +21,7 @@ export type PaymentAllocationInput = {
 	};
 	now?: number;
 	stage?: (stage: string) => void;
+	skipLockMaintenance?: boolean;
 	prepared?: PreparedReceivingMethodAllocation;
 	order?: {
 		externalOrderId: string;
@@ -79,7 +81,9 @@ export async function allocateUniqueReceivingMethodAndSnapshot(
 		maximumAttempts?: number;
 	},
 ) {
-	const configuredDecimals = await loadCheckoutAmountDecimals(db);
+	const configuredDecimals =
+		input.checkoutAmountDecimals ??
+		(await loadCheckoutAmountDecimals(db));
 	const quantized = quantizeUnitsUp(
 		parseAmountUnits(input.expectedAmountUnits),
 		input.decimals,
@@ -139,7 +143,7 @@ export async function allocateReceivingMethodAndSnapshot(
 		input.expiresAt,
 		input.reusableAt ?? input.expiresAt + 24 * 3_600_000,
 	);
-	if (!input.prepared)
+	if (!input.prepared && !(input.skipLockMaintenance ?? false))
 		await Promise.all([
 		releaseExpiredReceivingMethodLocks(
 			db,

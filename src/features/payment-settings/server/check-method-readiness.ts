@@ -49,6 +49,29 @@ export async function checkReceivingMethodOrderReadiness(
 	return validateOrderReadiness(methodId, checkedAt, methods.results, expected);
 }
 
+export function isLocallyValidTarget(target: string, adapter?: string | null) {
+	if (!target.trim()) return false;
+	switch (adapter) {
+		case "tron":
+			return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(target);
+		case "evm":
+			return /^0x[0-9a-fA-F]{40}$/.test(target);
+		case "solana":
+			return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target);
+		case "ton":
+			return /^(EQ|UQ)[A-Za-z0-9_-]{46}$/.test(target);
+		case "aptos":
+			return /^0x[0-9a-fA-F]{1,64}$/.test(target);
+		case "binance":
+		case "okx":
+			return /^[1-9]\d*$/.test(target);
+		case "okpay":
+			return target.length > 0;
+		default:
+			return false;
+	}
+}
+
 export async function checkReceivingMethodReadiness(
 	db: D1Database,
 	methodId: string,
@@ -147,7 +170,9 @@ function validateOrderReadiness(
 		return result(methodId, checkedAt, "unsupported", [
 			reason("METHOD_NOT_FOUND", "Receiving method does not exist."),
 		]);
-	if (methods.some((row) => row.asset_kind === "token" && !row.contract_address))
+	if (
+		methods.some((row) => row.asset_kind === "token" && !row.contract_address)
+	)
 		return result(methodId, checkedAt, "unsupported", [
 			reason("INVALID_ASSET", "The token contract is not configured."),
 		]);
@@ -159,7 +184,7 @@ function validateOrderReadiness(
 		return result(methodId, checkedAt, "missing_connection", [
 			reason("MISSING_CONNECTION", "Configure an enabled payment connection."),
 		]);
-	if (!method.target_value.trim() || !methods.some(isLocallyValidTarget))
+	if (!method.target_value.trim() || !methods.some(validateLocalTarget))
 		return result(methodId, checkedAt, "missing_target", [
 			reason("INVALID_TARGET", "The receiving target is invalid."),
 		]);
@@ -172,32 +197,16 @@ function validateOrderReadiness(
 		)
 	)
 		return result(methodId, checkedAt, "unsupported", [
-			reason("METHOD_NOT_FOUND", "Receiving method does not support this route."),
+			reason(
+				"METHOD_NOT_FOUND",
+				"Receiving method does not support this route.",
+			),
 		]);
 	return result(methodId, checkedAt, "ready", []);
 }
 
-function isLocallyValidTarget(row: ReceivingMethodReadinessRow) {
-	const target = row.target_value.trim();
-	switch (row.adapter) {
-		case "tron":
-			return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(target);
-		case "evm":
-			return /^0x[0-9a-fA-F]{40}$/.test(target);
-		case "solana":
-			return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(target);
-		case "ton":
-			return /^(EQ|UQ)[A-Za-z0-9_-]{46}$/.test(target);
-		case "aptos":
-			return /^0x[0-9a-fA-F]{1,64}$/.test(target);
-		case "binance":
-		case "okx":
-			return /^[1-9]\d*$/.test(target);
-		case "okpay":
-			return target.length > 0;
-		default:
-			return false;
-	}
+function validateLocalTarget(row: ReceivingMethodReadinessRow) {
+	return isLocallyValidTarget(row.target_value.trim(), row.adapter);
 }
 
 export async function assertReceivingMethodReadyForEnable(

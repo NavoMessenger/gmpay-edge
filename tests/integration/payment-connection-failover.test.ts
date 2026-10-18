@@ -209,6 +209,48 @@ describe("payment connection failover", () => {
 			}),
 		]);
 	});
+
+	it("acknowledges a stale scan after a paid order reaches final confirmation", async () => {
+		await db.batch([
+			db.prepare(
+				"UPDATE orders SET status = 'paid', paid_at = 1 WHERE id = 'order-eth'",
+			),
+			db.prepare(
+				"INSERT INTO order_payments (id, order_id, transaction_id, amount_units, confirmations, status, detected_at, confirmed_at, created_at, updated_at) VALUES ('payment-final', 'order-eth', 'ethereum:final:0', '1', 20, 'confirmed', 1, 1, 1, 1)",
+			),
+		]);
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		const ack = vi.fn();
+		const retry = vi.fn();
+		try {
+			await handlePaymentScan(
+				{
+					body: {
+						kind: "payment.scan",
+						version: 1,
+						receivingMethodId: "asset-eth",
+						orderId: "order-eth",
+					},
+					ack,
+					retry,
+				} as unknown as Message<
+					import("#/features/payments/types").PaymentScanMessage
+				>,
+				{ DB: db } as Env,
+			);
+		} finally {
+			await db.batch([
+				db.prepare("DELETE FROM order_payments WHERE id = 'payment-final'"),
+				db.prepare(
+					"UPDATE orders SET status = 'pending', paid_at = NULL WHERE id = 'order-eth'",
+				),
+			]);
+		}
+		expect(ack).toHaveBeenCalledOnce();
+		expect(retry).not.toHaveBeenCalled();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
 });
 
 async function seed(db: D1Database) {

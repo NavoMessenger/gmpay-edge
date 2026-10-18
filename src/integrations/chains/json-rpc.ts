@@ -1,8 +1,11 @@
+import { paceProviderRequest, retryAfterMs } from "../provider-errors";
+
 export class JsonRpcRequestError extends Error {
 	constructor(
 		readonly status: number,
 		readonly rpcCode?: number,
 		message?: string,
+		readonly retryAfterMs?: number,
 	) {
 		super(message ?? `JSON-RPC request failed with status ${status}`);
 	}
@@ -64,6 +67,8 @@ async function requestHttp(
 	apiKey?: string,
 	signal?: AbortSignal,
 ) {
+	await paceProviderRequest(url);
+	signal?.throwIfAborted();
 	const response = await fetch(url, {
 		method: "POST",
 		headers: {
@@ -73,7 +78,13 @@ async function requestHttp(
 		body: JSON.stringify(request),
 		signal: requestSignal(timeoutMs, signal),
 	});
-	if (!response.ok) throw new JsonRpcRequestError(response.status);
+	if (!response.ok)
+		throw new JsonRpcRequestError(
+			response.status,
+			undefined,
+			undefined,
+			retryAfterMs(response),
+		);
 	return response.json() as Promise<unknown>;
 }
 

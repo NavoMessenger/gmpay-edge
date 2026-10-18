@@ -285,7 +285,10 @@ function TaskScheduleControl({
 					required: true,
 					fieldProps: {
 						min: row.task === "payment_scan_enqueue" ? 15 : 60,
-						max: row.task === "retention_cleanup" ? 604800 : 3600,
+						max:
+							row.task === "retention_cleanup" || row.task === "rpc_health"
+								? 604800
+								: 3600,
 					},
 				},
 			]}

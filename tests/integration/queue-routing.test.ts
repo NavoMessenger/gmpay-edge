@@ -1,7 +1,10 @@
 import { Miniflare } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { handleQueue } from "#/server/queue";
-import { queueMessageKind } from "#/server/queue/routing";
+import {
+	queueMessageKind,
+	requeueFailedPaymentScanBatch,
+} from "#/server/queue/routing";
 import { applyMigrations } from "./migrations";
 
 describe("Cloudflare Queue envelope rejection", () => {
@@ -83,7 +86,7 @@ describe("Cloudflare Queue envelope rejection", () => {
 				batchSize: 1,
 				processedMessages: 1,
 				dedupeCount: 0,
-				maxBusinessConcurrency: 2,
+				maxBusinessConcurrency: 1,
 				oldestMessageAgeMs: expect.any(Number),
 				maxAttempts: 1,
 				durationMs: expect.any(Number),
@@ -94,7 +97,7 @@ describe("Cloudflare Queue envelope rejection", () => {
 	});
 
 	it.each([
-		["gmpay-edge-payments", 2],
+		["gmpay-edge-payments", 1],
 		["gmpay-edge-webhooks", 5],
 		["unknown-queue", 3],
 	])("limits %s message processing to %i", async (queue, expected) => {
@@ -271,6 +274,27 @@ describe("Cloudflare Queue envelope rejection", () => {
 		).toBe("invalid");
 	});
 
+	it("acknowledges a scan batch after requeueing only failed orders", async () => {
+		const ack = vi.fn();
+		const retry = vi.fn();
+		const send = vi.fn().mockResolvedValue(undefined);
+		const failed = [{ orderId: "failed-order", receivingMethodId: "method" }];
+		await requeueFailedPaymentScanBatch(
+			{ ack, retry } as unknown as Parameters<
+				typeof requeueFailedPaymentScanBatch
+			>[0],
+			{ PAYMENT_QUEUE: { send } } as unknown as Env,
+			failed,
+			60,
+		);
+		expect(send).toHaveBeenCalledWith(
+			{ kind: "payment.scan_batch", version: 1, orders: failed },
+			{ delaySeconds: 60 },
+		);
+		expect(ack).toHaveBeenCalledOnce();
+		expect(retry).not.toHaveBeenCalled();
+	});
+
 	it("accepts bounded payment-maintenance envelopes", () => {
 		expect(
 			queueMessageKind({
@@ -389,7 +413,7 @@ describe("Cloudflare Queue envelope rejection", () => {
 			)
 			.first<{ health_status: string; last_error_code: string | null }>();
 		expect(connection).toEqual({
-			health_status: "unhealthy",
+			health_status: "unknown",
 			last_error_code: "configuration",
 		});
 	});

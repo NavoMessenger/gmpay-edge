@@ -64,7 +64,7 @@ describe("Queue invocation backpressure", () => {
 
 	it.each([
 		["gmpay-edge-payments", "payment", 1, 1],
-		["gmpay-edge-payments", "payment", 10, 2],
+		["gmpay-edge-payments", "payment", 10, 1],
 		["gmpay-edge-webhooks", "webhook", 1, 1],
 		["gmpay-edge-webhooks", "webhook", 10, 5],
 	] as const)("bounds %s %s traffic with %i messages at %i active consumers", async (queue, kind, count, expectedPeak) => {

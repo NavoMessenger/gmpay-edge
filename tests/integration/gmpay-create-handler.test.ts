@@ -297,9 +297,9 @@ describe("GMPay create transaction HTTP handler", () => {
 		);
 		expect(created.status).toBe(200);
 		expect(createCounters).toMatchObject({
-			d1Prepare: 6,
+			d1Prepare: 5,
 			d1StatementFirst: 2,
-			d1StatementAll: 2,
+			d1StatementAll: 1,
 			d1StatementRun: 2,
 			d1Batch: 0,
 		});
@@ -321,9 +321,9 @@ describe("GMPay create transaction HTTP handler", () => {
 		} as Env);
 		expect(queried.status).toBe(200);
 		expect(queryCounters).toMatchObject({
-			d1Prepare: 5,
+			d1Prepare: 4,
 			d1StatementFirst: 3,
-			d1StatementAll: 1,
+			d1StatementAll: 0,
 			d1StatementRun: 1,
 			d1Batch: 0,
 		});
@@ -347,9 +347,9 @@ describe("GMPay create transaction HTTP handler", () => {
 		);
 		expect(rejected.status).toBe(401);
 		expect(rejectedCounters).toMatchObject({
-			d1Prepare: 2,
+			d1Prepare: 1,
 			d1StatementFirst: 1,
-			d1StatementAll: 1,
+			d1StatementAll: 0,
 			d1StatementRun: 0,
 			d1Batch: 0,
 		});

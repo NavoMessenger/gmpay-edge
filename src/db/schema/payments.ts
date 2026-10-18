@@ -102,6 +102,14 @@ export const paymentIngresses = sqliteTable(
 			mode: "timestamp_ms",
 		}),
 		lastPaymentScanErrorCode: text("last_payment_scan_error_code"),
+		rateLimitedUntil: integer("rate_limited_until", { mode: "timestamp_ms" }),
+		consecutiveRateLimits: integer("consecutive_rate_limits")
+			.notNull()
+			.default(0),
+		lastRetryAfterMs: integer("last_retry_after_ms"),
+		lastProviderSuccessAt: integer("last_provider_success_at", {
+			mode: "timestamp_ms",
+		}),
 		consecutiveHealthFailures: integer("consecutive_health_failures")
 			.notNull()
 			.default(0),
@@ -292,7 +300,7 @@ export const orders = sqliteTable(
 		index("orders_payment_scan_idx")
 			.on(table.lastPaymentScanAt, table.createdAt, table.id)
 			.where(
-				sql`${table.status} IN ('pending', 'confirming', 'partially_paid', 'paid', 'overpaid', 'expired')`,
+				sql`${table.status} IN ('pending', 'confirming', 'partially_paid', 'paid', 'overpaid')`,
 			),
 		uniqueIndex("orders_provider_order_uidx").on(table.providerOrderId),
 	],

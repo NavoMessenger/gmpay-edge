@@ -5,6 +5,7 @@ import { immediateReleaseModeSql } from "#/server/operational-settings";
 
 type AttributionCandidate = {
 	order_id: string;
+	status: "pending" | "confirming" | "partially_paid" | "paid" | "overpaid" | "expired" | "cancelled";
 	expected_amount_units: string;
 	received_amount_units: string;
 };
@@ -72,7 +73,7 @@ export async function resolvePaymentTransactionOrder(
 		: "order_payment_snapshots_target_idx";
 	const candidates = await db
 		.prepare(
-			`SELECT DISTINCT o.id AS order_id, o.received_amount_units,
+		`SELECT DISTINCT o.id AS order_id, o.status, o.received_amount_units,
 			 ops.expected_amount_units
 			 FROM order_payment_snapshots ops INDEXED BY ${targetIndex}
 			 JOIN orders o ON o.id = ops.order_id
@@ -117,7 +118,15 @@ export async function resolvePaymentTransactionOrder(
 	if (exactCandidate)
 		return { orderId: exactCandidate.order_id, alreadyAttributed: false };
 	const [onlyCandidate] = candidates.results;
-	if (onlyCandidate && candidates.results.length === 1)
+	// A terminal order is scanned only to surface a genuine late payment for
+	// review.  Do not let its shared receiving address claim an unrelated
+	// transfer from another deployment: terminal orders need an exact amount.
+	if (
+		onlyCandidate &&
+		candidates.results.length === 1 &&
+		onlyCandidate.status !== "expired" &&
+		onlyCandidate.status !== "cancelled"
+	)
 		return {
 			orderId: onlyCandidate.order_id,
 			alreadyAttributed: false,

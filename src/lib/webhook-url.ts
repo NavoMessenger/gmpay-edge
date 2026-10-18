@@ -92,26 +92,12 @@ export async function resolveWebhookHostname(
 ) {
 	let hadSuccessfulResponse = false;
 	for (let attempt = 0; attempt < 3; attempt++) {
-		for (const resolver of ["cloudflare", "google", "quad9"] as const) {
+		for (const resolver of ["cloudflare", "google"] as const) {
 			const results = await Promise.allSettled(
 				(["A", "AAAA"] as const).map((type) =>
 					queryDns(resolver, hostname, type, fetcher),
 				),
 			);
-			if (results.every((result) => result.status === "rejected")) {
-				console.warn(
-					JSON.stringify({
-						event: "webhook_dns_resolver_unavailable",
-						resolver,
-						attempt: attempt + 1,
-						failures: results.map((result) =>
-							result.status === "rejected" && result.reason instanceof Error
-								? result.reason.name
-								: "unknown",
-						),
-					}),
-				);
-			}
 			const addresses = results.flatMap((result) => {
 				if (result.status === "fulfilled") {
 					hadSuccessfulResponse = true;
@@ -129,7 +115,7 @@ export async function resolveWebhookHostname(
 }
 
 async function queryDns(
-	resolver: "cloudflare" | "google" | "quad9",
+	resolver: "cloudflare" | "google",
 	hostname: string,
 	type: "A" | "AAAA",
 	fetcher: typeof fetch,
@@ -137,9 +123,7 @@ async function queryDns(
 	const url =
 		resolver === "cloudflare"
 			? `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`
-			: resolver === "google"
-				? `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=${type}`
-				: `https://dns.quad9.net/dns-query?name=${encodeURIComponent(hostname)}&type=${type}`;
+			: `https://dns.google/resolve?name=${encodeURIComponent(hostname)}&type=${type}`;
 	const response = await fetcher(url, {
 		headers: { accept: "application/dns-json" },
 		redirect: "error",

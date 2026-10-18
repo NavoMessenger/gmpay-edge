@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paceProviderRequest, retryAfterMs } from "../provider-errors";
 import {
 	observeProviderOperation,
 	type ProviderOperationCounters,
@@ -372,6 +373,7 @@ export class TonAdapter implements PaymentAdapter<TonConfig> {
 		counters?: ProviderOperationCounters,
 	) {
 		counters?.request();
+		await paceProviderRequest(this.config.apiUrl);
 		const response = await fetch(
 			`${this.config.apiUrl.replace(/\/$/, "")}${path}`,
 			{
@@ -382,13 +384,17 @@ export class TonAdapter implements PaymentAdapter<TonConfig> {
 				signal: operationSignal(deadlineAt, "TON operation"),
 			},
 		);
-		if (!response.ok) throw new TonHttpError(response.status);
+		if (!response.ok)
+			throw new TonHttpError(response.status, retryAfterMs(response));
 		return response.json();
 	}
 }
 
 class TonHttpError extends Error {
-	constructor(readonly status: number) {
+	constructor(
+		readonly status: number,
+		readonly retryAfterMs?: number,
+	) {
 		super(`TON Center returned HTTP ${status}`);
 	}
 }

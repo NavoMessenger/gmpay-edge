@@ -287,6 +287,8 @@ async function createAdapter(
 		return new TronAdapter({
 			apiUrl: endpoint,
 			apiKey,
+			timeoutMs: connection.timeout_ms ?? undefined,
+			maxScanTransactions: connection.max_scan_transactions ?? undefined,
 		}) as PaymentAdapter<unknown>;
 	if (
 		connection.adapter === "evm" &&

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paceProviderRequest, retryAfterMs } from "../provider-errors";
 import {
 	observeProviderOperation,
 	type ProviderOperationCounters,
@@ -303,6 +304,7 @@ export class AptosAdapter implements PaymentAdapter<AptosConfig> {
 		counters?: ProviderOperationCounters,
 	) {
 		counters?.request();
+		await paceProviderRequest(this.config.indexerUrl);
 		const response = await fetch(this.config.indexerUrl, {
 			method: "POST",
 			headers: {
@@ -314,7 +316,8 @@ export class AptosAdapter implements PaymentAdapter<AptosConfig> {
 			body: JSON.stringify({ query, variables }),
 			signal: operationSignal(deadlineAt, "Aptos operation"),
 		});
-		if (!response.ok) throw new AptosHttpError(response.status);
+		if (!response.ok)
+			throw new AptosHttpError(response.status, retryAfterMs(response));
 		const payload = z
 			.object({
 				data: z.record(z.string(), z.unknown()).optional(),
@@ -328,7 +331,10 @@ export class AptosAdapter implements PaymentAdapter<AptosConfig> {
 }
 
 class AptosHttpError extends Error {
-	constructor(readonly status: number) {
+	constructor(
+		readonly status: number,
+		readonly retryAfterMs?: number,
+	) {
 		super(`Aptos Indexer returned HTTP ${status}`);
 	}
 }

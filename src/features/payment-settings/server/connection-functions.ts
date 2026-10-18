@@ -10,7 +10,10 @@ import {
 	updateProviderPaymentConnectionInput,
 } from "#/features/payment-settings/schema";
 import { adminContext } from "#/features/payment-settings/server/admin-context";
-import { loadPaymentConnectionApiKey } from "#/features/payment-settings/server/connection-credentials";
+import {
+	encryptPaymentConnectionCredential,
+	loadPaymentConnectionApiKey,
+} from "#/features/payment-settings/server/connection-credentials";
 import { testPaymentConnection } from "#/features/payment-settings/server/connection-health";
 
 const railKindSchema = z.enum(["chain", "exchange", "wallet"]);
@@ -232,6 +235,35 @@ export const updateChainConnectionFn = createServerFn({ method: "POST" })
 					maxScanTransactions: undefined,
 				};
 		const now = Date.now();
+		const nextApiKey = data.clearApiKey
+			? undefined
+			: data.apiKey?.trim() || currentApiKey;
+		const credentialUpdate = data.clearApiKey
+			? context.db
+					.prepare(
+						"DELETE FROM payment_ingress_credentials WHERE payment_ingress_id = ?",
+					)
+					.bind(data.id)
+			: data.apiKey?.trim()
+				? context.db
+						.prepare(
+							`INSERT INTO payment_ingress_credentials
+						 (payment_ingress_id, config_encrypted, created_at, updated_at)
+						 VALUES (?, ?, ?, ?)
+						 ON CONFLICT(payment_ingress_id) DO UPDATE SET
+						 config_encrypted = excluded.config_encrypted,
+						 updated_at = excluded.updated_at`,
+						)
+						.bind(
+							data.id,
+							await encryptPaymentConnectionCredential(
+								data.apiKey.trim(),
+								context.runtime.integrationConfigSecret,
+							),
+							now,
+							now,
+						)
+				: null;
 		await context.db.batch([
 			context.db
 				.prepare(
@@ -294,11 +326,12 @@ export const updateChainConnectionFn = createServerFn({ method: "POST" })
 						blockLookback: scanConfig.blockLookback ?? null,
 						logBlockRange: scanConfig.logBlockRange ?? null,
 						maxScanTransactions: scanConfig.maxScanTransactions ?? null,
-						hasApiKey: Boolean(currentApiKey),
+						hasApiKey: Boolean(nextApiKey),
 						connectivityChanged,
 					}),
 					now,
 				),
+			...(credentialUpdate ? [credentialUpdate] : []),
 		]);
 		return { id: data.id, connectivityChanged };
 	});

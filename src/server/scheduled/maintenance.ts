@@ -18,7 +18,6 @@ import type {
 	PaymentQueueMessage,
 	PaymentRateSyncMessage,
 	PaymentRpcHealthMessage,
-	PaymentScanMessage,
 } from "#/features/payments/types";
 import {
 	assertWebhookOutboxRecovered,
@@ -361,10 +360,12 @@ async function loadDueMaintenanceWork(
 			  LEFT JOIN payment_ingresses source
 			   ON source.network = ops.rail_code AND source.provider = 'alchemy'
 			   AND source.enabled = 1 AND source.mode = 'active'
-			  WHERE o.status IN ('pending','confirming','partially_paid','paid','overpaid','expired')
+			  WHERE o.status IN ('pending','confirming','partially_paid','paid','overpaid')
 			  AND ((o.status IN ('pending','confirming','partially_paid') AND o.expires_at > ?)
-			   OR (o.status IN ('paid','overpaid') AND o.paid_at >= ?)
-			   OR (o.status = 'expired' AND o.updated_at >= ?))
+			   OR (o.status IN ('paid','overpaid') AND o.paid_at >= ?
+			    AND EXISTS(SELECT 1 FROM order_payments op
+			     WHERE op.order_id = o.id AND op.status IN ('detected','confirming')))
+			   )
 			  AND (o.last_payment_scan_at IS NULL OR o.last_payment_scan_at <= CASE
 			   WHEN source.id IS NOT NULL AND source.health_status = 'healthy' THEN ?
 			   ELSE ? END) LIMIT 1) AS payment_scan`,
@@ -380,7 +381,6 @@ async function loadDueMaintenanceWork(
 			now,
 			now,
 			now,
-			monitorSince,
 			monitorSince,
 			webhookRecoveryBefore,
 			defaultScanBefore,
@@ -901,11 +901,12 @@ async function enqueuePaymentScans(
 		 LEFT JOIN payment_ingresses source
 		  ON source.network = ops.rail_code AND source.provider = 'alchemy'
 		  AND source.enabled = 1 AND source.mode = 'active'
-		 WHERE o.status IN ('pending','confirming','partially_paid','paid','overpaid','expired')
+		 WHERE o.status IN ('pending','confirming','partially_paid','paid','overpaid')
 		 AND (
 		  (o.status IN ('pending','confirming','partially_paid') AND o.expires_at > ?)
-		  OR (o.status IN ('paid','overpaid') AND o.paid_at >= ?)
-		  OR (o.status = 'expired' AND o.updated_at >= ?)
+		  OR (o.status IN ('paid','overpaid') AND o.paid_at >= ?
+		   AND EXISTS(SELECT 1 FROM order_payments op
+		    WHERE op.order_id = o.id AND op.status IN ('detected','confirming')))
 		 )
 		 AND (o.last_payment_scan_at IS NULL OR o.last_payment_scan_at <= CASE
 		  WHEN source.id IS NOT NULL AND source.health_status = 'healthy' THEN ?
@@ -914,7 +915,6 @@ async function enqueuePaymentScans(
 	)
 		.bind(
 			now,
-			monitorSince,
 			monitorSince,
 			webhookRecoveryBefore,
 			defaultScanBefore,
@@ -926,16 +926,21 @@ async function enqueuePaymentScans(
 		}>();
 	if (!activeOrders.results.length) return;
 	try {
-		await env.PAYMENT_QUEUE.sendBatch(
-			activeOrders.results.map((order) => ({
+		// One Queue message per scheduled batch, rather than one per order.
+		// The consumer still processes each order independently; this only
+		// avoids turning a one-minute scheduler into an unbounded Queue-op load.
+		await env.PAYMENT_QUEUE.sendBatch([
+			{
 				body: {
-					kind: "payment.scan",
+					kind: "payment.scan_batch",
 					version: 1,
-					receivingMethodId: order.receiving_method_id,
-					orderId: order.id,
-				} satisfies PaymentScanMessage,
-			})),
-		);
+					orders: activeOrders.results.map((order) => ({
+						receivingMethodId: order.receiving_method_id,
+						orderId: order.id,
+					})),
+				},
+			},
+		]);
 	} catch {
 		throw new DomainError(
 			"queue_enqueue_failed",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	createPaymentConnectionInput,
+	updateChainPaymentConnectionInput,
 	updateProviderPaymentConnectionInput,
 } from "#/features/payment-settings/schema";
 
@@ -92,16 +93,39 @@ describe("payment connection input", () => {
 		}
 	});
 
-	it("rejects credentials in chain connection configuration", () => {
-		for (const credential of [{ apiKey: "key" }, { clearApiKey: true }]) {
-			expect(
-				createPaymentConnectionInput.safeParse({
-					...base,
-					transport: "http",
-					endpoint: "https://rpc.example",
-					...credential,
-				}).success,
-			).toBe(false);
-		}
+	it("accepts an optional API key when updating a chain connection", () => {
+		expect(
+			updateChainPaymentConnectionInput.safeParse({
+				id: "tron",
+				name: "TronGrid",
+				transport: "http",
+				endpoint: "https://api.trongrid.io",
+				priority: 100,
+				apiKey: "key",
+			}).success,
+		).toBe(true);
+	});
+
+	it("allows clearing but not replacing and clearing a chain credential together", () => {
+		const input = {
+			id: "tron",
+			name: "TronGrid",
+			transport: "http" as const,
+			endpoint: "https://api.trongrid.io",
+			priority: 100,
+		};
+		expect(
+			updateChainPaymentConnectionInput.safeParse({
+				...input,
+				clearApiKey: true,
+			}).success,
+		).toBe(true);
+		expect(
+			updateChainPaymentConnectionInput.safeParse({
+				...input,
+				apiKey: "replacement",
+				clearApiKey: true,
+			}).success,
+		).toBe(false);
 	});
 });

@@ -8,6 +8,7 @@ type OperationalSettings = {
 	fixedExpiryMs: number;
 	defaultExpiryMs: number;
 	maxExpiryMs: number;
+	checkoutAmountDecimals: number;
 	latePaymentPolicy: "accept" | "review" | "reject";
 	webhookMaxAttempts: number;
 	webhookTimeoutMs: number;
@@ -25,6 +26,7 @@ const operationalSettingsSchema = z.object({
 	fixedExpiryMs: z.number().int().min(60_000).max(604_800_000),
 	defaultExpiryMs: z.number().int().min(60_000).max(86_400_000),
 	maxExpiryMs: z.number().int().min(300_000).max(604_800_000),
+	checkoutAmountDecimals: z.number().int().min(2).max(8),
 	latePaymentPolicy: z.enum(["accept", "review", "reject"]),
 	webhookMaxAttempts: z.number().int().min(1).max(20),
 	webhookTimeoutMs: z.number().int().min(1_000).max(30_000),
@@ -41,10 +43,11 @@ const defaults: OperationalSettings = {
 	fixedExpiryMs: 900_000,
 	defaultExpiryMs: 900_000,
 	maxExpiryMs: 86_400_000,
+	checkoutAmountDecimals: 4,
 	latePaymentPolicy: "review",
 	webhookMaxAttempts: 8,
 	webhookTimeoutMs: 10_000,
-	paymentScanBatchSize: 100,
+	paymentScanBatchSize: 20,
 	paymentScanIntervalMs: 60_000,
 	webhookRecoveryIntervalMs: 15 * 60_000,
 	retentionCleanupIntervalMs: 86_400_000,
@@ -53,12 +56,12 @@ const defaults: OperationalSettings = {
 	retentionAuditMs: 31_536_000_000,
 };
 
-
 const keys = {
 	"orders.immediate_release_mode": "immediateReleaseMode",
 	"orders.fixed_expiry_ms": "fixedExpiryMs",
 	"orders.default_expiry_ms": "defaultExpiryMs",
 	"orders.max_expiry_ms": "maxExpiryMs",
+	"payments.checkout_amount_decimals": "checkoutAmountDecimals",
 	"payments.late_payment_policy": "latePaymentPolicy",
 	"webhooks.max_attempts": "webhookMaxAttempts",
 	"webhooks.timeout_ms": "webhookTimeoutMs",

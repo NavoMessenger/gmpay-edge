@@ -10,6 +10,19 @@ describe("TON adapter", () => {
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 	});
+	it("sends the configured read-only API key", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(json({ jetton_transfers: [] }));
+		vi.stubGlobal("fetch", fetchMock);
+		await new TonAdapter({
+			apiUrl: "https://toncenter.com/api/v3",
+			apiKey: "read-only",
+			nativeAsset: "GRAM",
+			tokens: { USDT: { master, decimals: 6 } },
+		}).findTransactions({ address: owner, assetCode: "USDT" });
+		expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+			"X-API-Key": "read-only",
+		});
+	});
 	it("normalizes incoming Jetton transfers", async () => {
 		vi.stubGlobal(
 			"fetch",

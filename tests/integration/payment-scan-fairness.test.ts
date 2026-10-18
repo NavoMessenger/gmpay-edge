@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	advancePaymentScanCursor,
 	refreshPendingPaymentTransactions,
+	scanTransactions,
 } from "#/server/queue";
 import { runMaintenance } from "#/server/scheduled";
 import { MockTronAdapter } from "../fixtures/mock-tron-adapter";
@@ -65,11 +66,9 @@ describe("payment scan scheduling fairness", () => {
 				)
 				.run();
 			const sendBatch = vi.fn().mockImplementation(async (messages) => {
-				const scan = messages.find(
-					(message: { body: { kind: string } }) =>
-						message.body.kind === "payment.scan",
+				scanned.push(
+					...scheduledScanOrders(messages).map((scan) => scan.orderId),
 				);
-				if (scan) scanned.push(scan.body.orderId);
 			});
 			await runMaintenance(
 				{ DB: db, PAYMENT_QUEUE: { sendBatch } } as unknown as Env,
@@ -122,10 +121,9 @@ describe("payment scan scheduling fairness", () => {
 		]);
 		await runMaintenance(env, "*/1 * * * *", dependencies);
 		expect(sendBatch).toHaveBeenCalledOnce();
-		const scan = sendBatch.mock.calls
-			.flatMap(([messages]) => messages)
-			.find((message) => message.body.kind === "payment.scan");
-		expect(scan?.body.orderId).toBe("order-a");
+		expect(scheduledScanOrders(sendBatch.mock.calls[0]?.[0] ?? [])).toEqual([
+			{ orderId: "order-a", receivingMethodId: "method" },
+		]);
 
 		await db.prepare("DELETE FROM payment_ingresses").run();
 	});
@@ -159,12 +157,12 @@ describe("payment scan scheduling fairness", () => {
 			"*/1 * * * *",
 			dependencies,
 		);
-		expect(sendBatch.mock.calls[0]?.[0]?.[0]?.body).toMatchObject({
-			orderId: "order-a",
-		});
-		expect(sendBatch.mock.calls[0]?.[0]?.[0]?.body).not.toHaveProperty(
-			"sinceBlock",
-		);
+		const message = sendBatch.mock.calls[0]?.[0]?.[0]?.body;
+		expect(message).toMatchObject({ kind: "payment.scan_batch" });
+		expect(
+			scheduledScanOrders(sendBatch.mock.calls[0]?.[0] ?? []),
+		).toContainEqual({ orderId: "order-a", receivingMethodId: "method" });
+		expect(message).not.toHaveProperty("sinceBlock");
 		const stored = await db
 			.prepare("SELECT payment_scan_cursor FROM orders WHERE id = 'order-a'")
 			.first<{ payment_scan_cursor: string | null }>();
@@ -208,7 +206,59 @@ describe("payment scan scheduling fairness", () => {
 		]);
 	});
 
-	it("continues old-order monitoring after its method and target are disabled", async () => {
+	it("reuses a wider address and asset discovery scan for later cursors", async () => {
+		const adapter = new MockTronAdapter();
+		const findTransactions = vi.spyOn(adapter, "findTransactions");
+		const discoveryCache = new Map();
+		const base = {
+			kind: "payment.scan" as const,
+			version: 1 as const,
+			receivingMethodId: "method",
+			address: "TSharedAddress",
+		};
+		await scanTransactions(
+			db,
+			{ ...base, orderId: "missing-a", sinceBlock: "10" },
+			"TRX",
+			adapter,
+			undefined,
+			discoveryCache,
+			"shared-group",
+		);
+		await scanTransactions(
+			db,
+			{ ...base, orderId: "missing-b", sinceBlock: "20" },
+			"TRX",
+			adapter,
+			undefined,
+			discoveryCache,
+			"shared-group",
+		);
+		expect(findTransactions).toHaveBeenCalledOnce();
+	});
+
+	it("deduplicates pending transaction refreshes within one queue invocation", async () => {
+		const adapter = new MockTronAdapter();
+		const getTransaction = vi.spyOn(adapter, "getTransaction");
+		const transactionCache = new Map();
+		await refreshPendingPaymentTransactions(
+			db,
+			"order-a",
+			adapter,
+			transactionCache,
+			"connection",
+		);
+		await refreshPendingPaymentTransactions(
+			db,
+			"order-a",
+			adapter,
+			transactionCache,
+			"connection",
+		);
+		expect(getTransaction).toHaveBeenCalledOnce();
+	});
+
+	it("only schedules recent paid orders that still have unsettled payments", async () => {
 		const now = Date.now();
 		await db.batch([
 			db.prepare("UPDATE orders SET status = 'expired', updated_at = 0"),
@@ -223,9 +273,14 @@ describe("payment scan scheduling fairness", () => {
 			),
 			db
 				.prepare(
-					"INSERT INTO orders (id, external_order_id, status, amount_minor, currency, currency_decimals, payment_asset_id, received_amount_units, expires_at, paid_at, version, created_at, updated_at) VALUES ('order-recent-paid', 'recent-paid', 'paid', '100', 'USD', 2, 'asset', '1', ?, ?, 1, ?, ?)",
+					"INSERT INTO orders (id, external_order_id, status, amount_minor, currency, currency_decimals, payment_asset_id, received_amount_units, expires_at, paid_at, version, created_at, updated_at) VALUES ('order-recent-paid-unsettled', 'recent-paid-unsettled', 'paid', '100', 'USD', 2, 'asset', '1', ?, ?, 1, ?, ?)",
 				)
 				.bind(now - 1, now - 60_000, now, now),
+			db
+				.prepare(
+					"INSERT INTO orders (id, external_order_id, status, amount_minor, currency, currency_decimals, payment_asset_id, received_amount_units, expires_at, paid_at, version, created_at, updated_at) VALUES ('order-recent-paid-final', 'recent-paid-final', 'paid', '100', 'USD', 2, 'asset', '1', ?, ?, 1, ?, ?)",
+				)
+				.bind(now - 1, now - 60_000, now + 1, now + 1),
 			db
 				.prepare(
 					"INSERT INTO orders (id, external_order_id, status, amount_minor, currency, currency_decimals, payment_asset_id, received_amount_units, expires_at, paid_at, version, created_at, updated_at) VALUES ('order-old-paid', 'old-paid', 'paid', '100', 'USD', 2, 'asset', '1', ?, ?, 1, ?, ?)",
@@ -238,9 +293,25 @@ describe("payment scan scheduling fairness", () => {
 				.bind(now - 1, now, now),
 		]);
 		await db.batch([
-			paymentSnapshot(db, "order-recent-paid", "TRecentPaid", now),
+			paymentSnapshot(
+				db,
+				"order-recent-paid-unsettled",
+				"TRecentPaidUnsettled",
+				now,
+			),
+			paymentSnapshot(db, "order-recent-paid-final", "TRecentPaidFinal", now),
 			paymentSnapshot(db, "order-old-paid", "TOldPaid", now),
 			paymentSnapshot(db, "order-recent-expired", "TRecentExpired", now),
+			db
+				.prepare(
+					"INSERT INTO order_payments (id, order_id, transaction_id, amount_units, confirmations, status, detected_at, created_at, updated_at) VALUES ('op-recent-paid-unsettled', 'order-recent-paid-unsettled', 'tron:recent-paid-unsettled:0', '1', 0, 'confirming', ?, ?, ?)",
+				)
+				.bind(now, now, now),
+			db
+				.prepare(
+					"INSERT INTO order_payments (id, order_id, transaction_id, amount_units, confirmations, status, detected_at, confirmed_at, created_at, updated_at) VALUES ('op-recent-paid-final', 'order-recent-paid-final', 'tron:recent-paid-final:0', '1', 20, 'confirmed', ?, ?, ?, ?)",
+				)
+				.bind(now, now, now, now),
 		]);
 		const sendBatch = vi.fn().mockResolvedValue(undefined);
 		await runMaintenance(
@@ -249,13 +320,26 @@ describe("payment scan scheduling fairness", () => {
 			dependencies,
 		);
 		expect(
-			sendBatch.mock.calls
-				.flatMap(([messages]) => messages)
-				.filter((message) => message.body.kind === "payment.scan")
-				.map((message) => message.body.orderId),
-		).toEqual(["order-recent-paid", "order-recent-expired"]);
+			scheduledScanOrders(
+				sendBatch.mock.calls.flatMap(([messages]) => messages),
+			).map((message) => message.orderId),
+		).toEqual(["order-recent-paid-unsettled"]);
 	});
 });
+
+function scheduledScanOrders(
+	messages: Array<{ body: { kind: string; orders?: unknown } }>,
+) {
+	return messages.flatMap((message) =>
+		message.body.kind === "payment.scan_batch" &&
+		Array.isArray(message.body.orders)
+			? (message.body.orders as Array<{
+					orderId: string;
+					receivingMethodId: string;
+				}>)
+			: [],
+	);
+}
 
 function paymentSnapshot(
 	db: D1Database,

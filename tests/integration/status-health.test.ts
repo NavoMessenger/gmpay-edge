@@ -284,10 +284,15 @@ describe("public health receiving-method readiness", () => {
 	});
 
 	it("records scan observations without changing scheduled health state", async () => {
-		await recordPaymentScanObservation(db, "connection-chain", "network");
+		await recordPaymentScanObservation(
+			db,
+			"connection-chain",
+			"rate_limit",
+			45_000,
+		);
 		const connection = await db
 			.prepare(
-				"SELECT health_status, last_checked_at, last_error_code, consecutive_health_failures, last_payment_scan_at, last_payment_scan_error_code FROM payment_ingresses WHERE id = ?",
+				"SELECT health_status, last_checked_at, last_error_code, consecutive_health_failures, last_payment_scan_at, last_payment_scan_error_code, rate_limited_until, consecutive_rate_limits, last_retry_after_ms FROM payment_ingresses WHERE id = ?",
 			)
 			.bind("connection-chain")
 			.first<{
@@ -297,6 +302,9 @@ describe("public health receiving-method readiness", () => {
 				consecutive_health_failures: number;
 				last_payment_scan_at: number | null;
 				last_payment_scan_error_code: string | null;
+				rate_limited_until: number | null;
+				consecutive_rate_limits: number;
+				last_retry_after_ms: number | null;
 			}>();
 		expect(connection).toEqual({
 			health_status: "healthy",
@@ -304,14 +312,17 @@ describe("public health receiving-method readiness", () => {
 			last_error_code: null,
 			consecutive_health_failures: 0,
 			last_payment_scan_at: expect.any(Number),
-			last_payment_scan_error_code: "network",
+			last_payment_scan_error_code: "rate_limit",
+			rate_limited_until: expect.any(Number),
+			consecutive_rate_limits: 1,
+			last_retry_after_ms: 45_000,
 		});
 
 		await recordPaymentScanObservation(db, "connection-chain", null);
 		expect(
 			await db
 				.prepare(
-					"SELECT health_status, last_checked_at, consecutive_health_failures, last_payment_scan_error_code FROM payment_ingresses WHERE id = ?",
+					"SELECT health_status, last_checked_at, consecutive_health_failures, last_payment_scan_error_code, rate_limited_until, consecutive_rate_limits, last_retry_after_ms, last_provider_success_at FROM payment_ingresses WHERE id = ?",
 				)
 				.bind("connection-chain")
 				.first(),
@@ -320,6 +331,10 @@ describe("public health receiving-method readiness", () => {
 			last_checked_at: 123,
 			consecutive_health_failures: 0,
 			last_payment_scan_error_code: null,
+			rate_limited_until: null,
+			consecutive_rate_limits: 0,
+			last_retry_after_ms: null,
+			last_provider_success_at: expect.any(Number),
 		});
 	});
 });

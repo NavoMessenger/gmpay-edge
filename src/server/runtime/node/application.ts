@@ -92,7 +92,7 @@ export async function createNodeApplication(
 		baseRetryDelayMs: 15_000,
 	});
 	const paymentConsumer = paymentQueue.createConsumer(consume, {
-		concurrency: 2,
+		concurrency: 1,
 		maxAttempts: 5,
 		baseRetryDelayMs: 15_000,
 	});

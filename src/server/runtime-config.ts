@@ -15,6 +15,10 @@ export type RuntimeConfig = {
 };
 
 const requestRuntimeConfig = new WeakMap<Request, Promise<RuntimeConfig>>();
+const runtimeConfigCacheTtlMs = 10_000;
+let runtimeConfigCache:
+	| { value: RuntimeConfig; expiresAt: number }
+	| undefined = undefined;
 
 export function loadRequestRuntimeConfig(
 	request: Request,
@@ -33,14 +37,20 @@ export function loadRequestRuntimeConfig(
 export async function loadRuntimeConfig(
 	db: D1Database,
 ): Promise<RuntimeConfig> {
+	const now = Date.now();
+	const cached = runtimeConfigCache;
+	if (cached && cached.expiresAt > now) return cached.value;
+
 	const rows = await db
 		.prepare(`SELECT key, value FROM system_settings WHERE key IN (?, ?, ?, ?)`)
 		.bind(...Object.values(runtimeConfigKeys))
 		.all<{ key: string; value: string }>();
-	return runtimeConfigFromSettings(
+	const value = runtimeConfigFromSettings(
 		new Map(rows.results.map((row) => [row.key, row.value])),
 		"",
 	);
+	runtimeConfigCache = { value, expiresAt: now + runtimeConfigCacheTtlMs };
+	return value;
 }
 
 function runtimeConfigFromSettings(

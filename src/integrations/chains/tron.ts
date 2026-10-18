@@ -1,5 +1,6 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { z } from "zod";
+import { paceProviderRequest, retryAfterMs } from "../provider-errors";
 import {
 	observeProviderOperation,
 	type ProviderOperationCounters,
@@ -17,9 +18,9 @@ import type {
 const configSchema = z.object({
 	apiUrl: z.url().default("https://api.trongrid.io"),
 	apiKey: z.string().min(1).optional(),
-	timeoutMs: z.number().int().min(1000).max(30_000).default(8000),
+	timeoutMs: z.number().int().min(1000).max(30_000).default(30_000),
 	maxPages: z.number().int().min(1).max(500).default(50),
-	maxConcurrentRequests: z.number().int().min(1).max(10).default(3),
+	maxConcurrentRequests: z.number().int().min(1).max(10).default(1),
 	maxScanTransactions: z.number().int().min(1).max(10_000).default(1000),
 });
 export type TronConfig = z.infer<typeof configSchema>;
@@ -32,7 +33,7 @@ const envelopeSchema = z.object({
 const trc20TransferSchema = z.object({
 	transaction_id: z.string(),
 	block_timestamp: z.number(),
-	block_number: z.number(),
+	block_number: z.number().int().nonnegative().optional(),
 	from: z.string(),
 	to: z.string(),
 	value: z.string().regex(/^\d+$/),
@@ -78,6 +79,7 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 	readonly network = "tron" as const;
 	readonly configSchema = configSchema;
 	readonly config: TronConfig;
+	private lastScanCursor?: bigint;
 	constructor(config: unknown) {
 		this.config = this.validateConfig(config);
 	}
@@ -225,6 +227,7 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 		address: string;
 		assetCode: string;
 		sinceBlock?: bigint;
+		sinceTimestamp?: Date;
 	}): Promise<NormalizedTransaction[]> {
 		if (!this.validateAddress(input.address))
 			throw new Error("Invalid TRON address");
@@ -242,16 +245,26 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 			address: string;
 			assetCode: string;
 			sinceBlock?: bigint;
+			sinceTimestamp?: Date;
 		},
 		counters: ProviderOperationCounters,
 	): Promise<NormalizedTransaction[]> {
 		const deadlineAt = operationDeadline(this.config.timeoutMs);
 		const current = await this.currentBlock(deadlineAt, counters);
+		this.lastScanCursor = BigInt(current.number);
+		const sinceTimestamp = input.sinceTimestamp
+			? Math.max(0, input.sinceTimestamp.getTime() - 5 * 60_000)
+			: undefined;
 		const path =
 			input.assetCode.toUpperCase() === "TRX"
-				? `/v1/accounts/${input.address}/transactions?only_to=true&limit=200&order_by=block_timestamp,desc`
-				: `/v1/accounts/${input.address}/transactions/trc20?only_to=true&limit=200&order_by=block_timestamp,desc`;
-		const rows = await this.accountTransactions(path, deadlineAt, counters);
+				? `/v1/accounts/${input.address}/transactions?only_to=true&limit=20&order_by=block_timestamp,desc${sinceTimestamp == null ? "" : `&min_timestamp=${sinceTimestamp}`}`
+				: `/v1/accounts/${input.address}/transactions/trc20?only_to=true&limit=20&order_by=block_timestamp,desc${sinceTimestamp == null ? "" : `&min_timestamp=${sinceTimestamp}`}`;
+		const rows = await this.accountTransactions(
+			path,
+			deadlineAt,
+			counters,
+			input.sinceBlock == null ? 1 : this.config.maxPages,
+		);
 		const blockHashes = new Map<number, Promise<string>>();
 		const blockHash = (blockNumber: number) => {
 			let pending = blockHashes.get(blockNumber);
@@ -282,23 +295,38 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 					)
 				: await mapConcurrently(
 						rows
-							.map((row) => trc20TransferSchema.parse(row))
+							.map((row) => trc20TransferSchema.safeParse(row))
+							.filter((parsed) => parsed.success)
+							.map((parsed) => parsed.data)
 							.filter(
 								(row) =>
 									row.to === input.address &&
 									row.token_info.symbol.toUpperCase() ===
-										input.assetCode.toUpperCase() &&
-									(input.sinceBlock == null ||
-										BigInt(row.block_number) >= input.sinceBlock),
+										input.assetCode.toUpperCase(),
 							),
 						this.config.maxConcurrentRequests,
 						async (row) => {
+							const blockNumber =
+								row.block_number ??
+								(await this.transactionBlockNumber(
+									row.transaction_id,
+									deadlineAt,
+									counters,
+								));
+							if (
+								blockNumber == null ||
+								(input.sinceBlock != null &&
+									BigInt(blockNumber) < input.sinceBlock)
+							)
+								return null;
 							return this.normalizeTrc20(
-								row,
+								{ ...row, block_number: blockNumber },
 								current,
-								await blockHash(row.block_number),
+								await blockHash(blockNumber),
 							);
 						},
+					).then((items) =>
+						items.filter((item): item is NormalizedTransaction => item != null),
 					);
 		return transactions.filter(
 			(transaction) =>
@@ -308,15 +336,19 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 					transaction.blockNumber >= input.sinceBlock),
 		);
 	}
+	scanCursor() {
+		return this.lastScanCursor;
+	}
 	private async accountTransactions(
 		path: string,
 		deadlineAt: number,
 		counters: ProviderOperationCounters,
+		maxPages = this.config.maxPages,
 	) {
 		const rows: unknown[] = [];
 		const seen = new Set<string>();
 		let fingerprint: string | undefined;
-		for (let page = 0; page < this.config.maxPages; page += 1) {
+		for (let page = 0; page < maxPages; page += 1) {
 			counters.page();
 			const separator = path.includes("?") ? "&" : "?";
 			const envelope = envelopeSchema.parse(
@@ -336,6 +368,9 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 			rows.push(...envelope.data);
 			const next = envelope.meta?.fingerprint;
 			if (!next) return rows;
+			// Initial discovery intentionally covers only the newest page. A next
+			// fingerprint means older history exists, not that this scan failed.
+			if (maxPages === 1) return rows;
 			if (rows.length >= this.config.maxScanTransactions)
 				throw new Error(
 					"TRON transaction scan exceeded the configured row limit",
@@ -348,6 +383,23 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 		throw new Error(
 			"TRON transaction pagination exceeded the configured limit",
 		);
+	}
+	private async transactionBlockNumber(
+		hash: string,
+		deadlineAt: number,
+		counters: ProviderOperationCounters,
+	) {
+		const info = z
+			.looseObject({ blockNumber: z.number().int().nonnegative().optional() })
+			.parse(
+				await this.request(
+					"/wallet/gettransactioninfobyid",
+					{ method: "POST", body: JSON.stringify({ value: hash }) },
+					deadlineAt,
+					counters,
+				),
+			);
+		return info.blockNumber ?? null;
 	}
 	async getConfirmations(transaction: NormalizedTransaction): Promise<number> {
 		return observeProviderOperation(
@@ -371,7 +423,17 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 					operation: "health_check",
 					classifyError: (error) => this.classifyError(error),
 				},
-				(counters) => this.currentBlock(undefined, counters),
+				async (counters) => {
+					await this.currentBlock(undefined, counters);
+					envelopeSchema.parse(
+						await this.request(
+							"/v1/accounts/T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb/transactions/trc20?only_to=true&limit=1",
+							undefined,
+							undefined,
+							counters,
+						),
+					);
+				},
 			);
 			return {
 				healthy: true,
@@ -389,6 +451,7 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 	}
 	classifyError(error: unknown): AdapterErrorKind {
 		if (error instanceof TronHttpError) {
+			if (error.providerCode === "rate_limit") return "rate_limit";
 			if (error.status === 401 || error.status === 403) return "authentication";
 			if (error.status === 404) return "not_found";
 			if (error.status === 429) return "rate_limit";
@@ -447,6 +510,7 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 		counters?: ProviderOperationCounters,
 	): Promise<T> {
 		counters?.request();
+		await paceProviderRequest(this.config.apiUrl);
 		const response = await fetch(
 			`${this.config.apiUrl.replace(/\/$/, "")}${path}`,
 			{
@@ -461,11 +525,11 @@ export class TronAdapter implements PaymentAdapter<TronConfig> {
 				},
 			},
 		);
-		if (!response.ok) throw new TronHttpError(response.status);
+		if (!response.ok) throw await tronHttpError(response);
 		return (await response.json()) as T;
 	}
 	private normalizeTrc20(
-		row: z.infer<typeof trc20TransferSchema>,
+		row: z.infer<typeof trc20TransferSchema> & { block_number: number },
 		current: { number: number },
 		blockHash: string,
 	): NormalizedTransaction {
@@ -573,9 +637,38 @@ async function mapConcurrently<T, R>(
 }
 
 class TronHttpError extends Error {
-	constructor(readonly status: number) {
+	constructor(
+		readonly status: number,
+		readonly retryAfterMs?: number,
+		readonly providerCode?: "rate_limit" | "authentication",
+	) {
 		super(`TRON API returned HTTP ${status}`);
 	}
+}
+
+async function tronHttpError(response: Response) {
+	let providerCode: "rate_limit" | "authentication" | undefined;
+	try {
+		const payload = z
+			.looseObject({
+				Error: z.string().optional(),
+				code: z.string().optional(),
+				message: z.string().optional(),
+			})
+			.parse(await response.json());
+		const signal = `${payload.Error ?? ""} ${payload.code ?? ""} ${payload.message ?? ""}`;
+		if (/rate|frequency|quota|too many|limit/i.test(signal))
+			providerCode = "rate_limit";
+		else if (/auth|api.?key|credential|forbidden|unauthor/i.test(signal))
+			providerCode = "authentication";
+	} catch {
+		// Provider bodies are intentionally discarded; only the safe category survives.
+	}
+	return new TronHttpError(
+		response.status,
+		retryAfterMs(response),
+		providerCode,
+	);
 }
 function confirmations(current: number, block: number) {
 	return Math.max(0, current - block + 1);

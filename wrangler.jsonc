@@ -11,12 +11,12 @@
 		{
 			"binding": "DB",
 			"database_name": "gmpay-edge",
-			"migrations_dir": "drizzle","database_id": "9402f0ce-2c3c-4543-a420-ee30e69f493b"
+			"migrations_dir": "drizzle"
 		}
 	],
-	"r2_buckets": [{ "binding": "FILES", "bucket_name": "gmpay-edge-files","preview_bucket_name": "gmpay-edge-files" }],
+	"r2_buckets": [{ "binding": "FILES", "bucket_name": "gmpay-edge-files" }],
 	"kv_namespaces": [
-		{ "binding": "CACHE","id": "2c3cb9f190c943349b908c95f03055db" }
+		{ "binding": "CACHE" }
 	],
 	"send_email": [{ "name": "EMAIL" }],
 	"queues": {
@@ -38,7 +38,7 @@
 				"queue": "gmpay-edge-payments",
 				"max_batch_size": 10,
 				"max_batch_timeout": 1,
-				"max_concurrency": 2,
+				"max_concurrency": 1,
 				"max_retries": 5,
 				"retry_delay": 15,
 				"dead_letter_queue": "gmpay-edge-payments-dlq"

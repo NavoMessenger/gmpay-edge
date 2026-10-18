@@ -5,6 +5,7 @@ import type {
 	PaymentQueueMessage,
 	PaymentRateSyncMessage,
 	PaymentRpcHealthMessage,
+	PaymentScanBatchMessage,
 	PaymentScanMessage,
 } from "#/features/payments/types";
 import { processWebhookMessage } from "#/features/webhooks/server/consumer";
@@ -12,7 +13,11 @@ import type { WebhookQueueMessage } from "#/features/webhooks/types";
 import { loadOperationalSettings } from "#/server/operational-settings";
 import { handlePaymentMaintenance } from "#/server/queue/payment-maintenance";
 import { handlePaymentProviderEvent } from "#/server/queue/payment-provider-event";
-import { handlePaymentScan } from "#/server/queue/payment-scan";
+import {
+	handlePaymentScan,
+	type PaymentDiscoveryCache,
+	type PaymentTransactionCache,
+} from "#/server/queue/payment-scan";
 import { loadRuntimeConfig } from "#/server/runtime-config";
 
 export async function handleQueue(
@@ -40,6 +45,8 @@ export async function handleQueue(
 			string,
 			ReturnType<typeof createReceivingMethodAdapters>
 		>();
+		const discoveryCache: PaymentDiscoveryCache = new Map();
+		const transactionCache: PaymentTransactionCache = new Map();
 		for (let index = 0; index < trackedMessages.length; index += concurrency) {
 			await Promise.all(
 				trackedMessages
@@ -50,6 +57,8 @@ export async function handleQueue(
 								settings,
 								runtime,
 								adapterCache,
+								discoveryCache,
+								transactionCache,
 								expectedKind,
 							});
 						} catch {
@@ -129,7 +138,7 @@ function trackQueueMessage(
 }
 
 function queueProcessingConcurrency(queue: string) {
-	if (queue === "gmpay-edge-payments") return 2;
+	if (queue === "gmpay-edge-payments") return 1;
 	if (queue === "gmpay-edge-webhooks") return 5;
 	return 3;
 }
@@ -184,6 +193,8 @@ async function processQueueMessage(
 		>;
 		runtime: Promise<Awaited<ReturnType<typeof loadRuntimeConfig>> | undefined>;
 		adapterCache: Map<string, ReturnType<typeof createReceivingMethodAdapters>>;
+		discoveryCache: PaymentDiscoveryCache;
+		transactionCache: PaymentTransactionCache;
 		expectedKind: ReturnType<typeof queueExpectedMessageKind>;
 	},
 ) {
@@ -214,6 +225,17 @@ async function processQueueMessage(
 			env,
 			await context.runtime,
 			context.adapterCache,
+			context.discoveryCache,
+			context.transactionCache,
+		);
+	if (isPaymentScanBatchQueueMessage(message))
+		return handlePaymentScanBatch(
+			message,
+			env,
+			await context.runtime,
+			context.adapterCache,
+			context.discoveryCache,
+			context.transactionCache,
 		);
 	if (isPaymentProviderEventQueueMessage(message))
 		return handlePaymentProviderEvent(message, env, await context.runtime);
@@ -231,6 +253,7 @@ export function queueMessageKind(value: unknown) {
 	if (isWebhookQueueMessageBody(value)) return "webhook" as const;
 	if (
 		isPaymentScanMessageBody(value) ||
+		isPaymentScanBatchMessageBody(value) ||
 		isPaymentProviderEventMessageBody(value) ||
 		isPaymentRateSyncMessageBody(value) ||
 		isPaymentRpcHealthMessageBody(value) ||
@@ -250,6 +273,105 @@ function isPaymentScanQueueMessage(
 	message: Message<WebhookQueueMessage | PaymentQueueMessage>,
 ): message is Message<PaymentScanMessage> {
 	return isPaymentScanMessageBody(message.body);
+}
+
+function isPaymentScanBatchQueueMessage(
+	message: Message<WebhookQueueMessage | PaymentQueueMessage>,
+): message is Message<PaymentScanBatchMessage> {
+	return isPaymentScanBatchMessageBody(message.body);
+}
+
+async function handlePaymentScanBatch(
+	message: Message<PaymentScanBatchMessage>,
+	env: Env,
+	runtime: Awaited<ReturnType<typeof loadRuntimeConfig>> | undefined,
+	adapterCache: Map<string, ReturnType<typeof createReceivingMethodAdapters>>,
+	discoveryCache: PaymentDiscoveryCache,
+	transactionCache: PaymentTransactionCache,
+) {
+	const failed: PaymentScanBatchMessage["orders"] = [];
+	let retryDelaySeconds = 0;
+	for (const order of await sortPaymentScansByCursor(
+		env.DB,
+		message.body.orders,
+	)) {
+		await handlePaymentScan(
+			{
+				...message,
+				body: { kind: "payment.scan", version: 1, ...order },
+				ack: () => undefined,
+				retry: (options) => {
+					failed.push(order);
+					retryDelaySeconds = Math.max(
+						retryDelaySeconds,
+						options?.delaySeconds ?? 0,
+					);
+				},
+			} as Message<PaymentScanMessage>,
+			env,
+			runtime,
+			adapterCache,
+			discoveryCache,
+			transactionCache,
+		);
+	}
+	await requeueFailedPaymentScanBatch(message, env, failed, retryDelaySeconds);
+}
+
+async function sortPaymentScansByCursor(
+	db: D1Database,
+	orders: PaymentScanBatchMessage["orders"],
+) {
+	const rows = await db
+		.prepare(
+			`SELECT id, payment_scan_cursor FROM orders
+			 WHERE id IN (${orders.map(() => "?").join(",")})`,
+		)
+		.bind(...orders.map((order) => order.orderId))
+		.all<{ id: string; payment_scan_cursor: string | null }>();
+	const cursorByOrder = new Map(
+		rows.results.map((row) => [row.id, row.payment_scan_cursor]),
+	);
+	return [...orders].sort((left, right) =>
+		compareScanCursors(
+			cursorByOrder.get(left.orderId) ?? null,
+			cursorByOrder.get(right.orderId) ?? null,
+		),
+	);
+}
+
+function compareScanCursors(left: string | null, right: string | null) {
+	if (left === right) return 0;
+	if (left === null) return -1;
+	if (right === null) return 1;
+	const leftCursor = BigInt(left);
+	const rightCursor = BigInt(right);
+	return leftCursor < rightCursor ? -1 : leftCursor > rightCursor ? 1 : 0;
+}
+
+export async function requeueFailedPaymentScanBatch(
+	message: Message<PaymentScanBatchMessage>,
+	env: Env,
+	failed: PaymentScanBatchMessage["orders"],
+	retryDelaySeconds: number,
+) {
+	if (!failed.length) {
+		message.ack();
+		return;
+	}
+	if (!env.PAYMENT_QUEUE) {
+		message.retry({ delaySeconds: retryDelaySeconds });
+		return;
+	}
+	try {
+		await env.PAYMENT_QUEUE.send(
+			{ kind: "payment.scan_batch", version: 1, orders: failed },
+			{ delaySeconds: retryDelaySeconds },
+		);
+		message.ack();
+	} catch {
+		message.retry({ delaySeconds: retryDelaySeconds });
+	}
 }
 
 function isPaymentProviderEventQueueMessage(
@@ -302,6 +424,28 @@ function isPaymentScanMessageBody(value: unknown): value is PaymentScanMessage {
 		hasOnlyKeys(value, ["kind", "version", "receivingMethodId", "orderId"]) &&
 		isBoundedString(value.receivingMethodId, 128) &&
 		isBoundedString(value.orderId, 128)
+	);
+}
+
+function isPaymentScanBatchMessageBody(
+	value: unknown,
+): value is PaymentScanBatchMessage {
+	if (!isRecord(value)) return false;
+	if (
+		value.kind !== "payment.scan_batch" ||
+		value.version !== 1 ||
+		!hasOnlyKeys(value, ["kind", "version", "orders"]) ||
+		!Array.isArray(value.orders) ||
+		value.orders.length < 1 ||
+		value.orders.length > 100
+	)
+		return false;
+	return value.orders.every(
+		(order) =>
+			isRecord(order) &&
+			hasOnlyKeys(order, ["receivingMethodId", "orderId"]) &&
+			isBoundedString(order.receivingMethodId, 128) &&
+			isBoundedString(order.orderId, 128),
 	);
 }
 

@@ -55,8 +55,14 @@ export const updateChainPaymentConnectionInput = paymentConnectionIdInput
 	.extend({
 		...connectionFields.shape,
 		...evmScanConfigFields,
+		apiKey: z.string().trim().max(512).optional(),
+		clearApiKey: z.boolean().optional(),
 	})
 	.strict()
+	.refine((value) => !(value.clearApiKey && value.apiKey), {
+		message: "API key cannot be replaced and cleared together",
+		path: ["apiKey"],
+	})
 	.refine(transportMatchesEndpoint, connectionProtocolIssue);
 
 export const updateProviderPaymentConnectionInput = paymentConnectionIdInput

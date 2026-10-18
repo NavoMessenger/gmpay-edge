@@ -69,7 +69,10 @@ export interface PaymentAdapter<TConfig> {
 		address: string;
 		assetCode: string;
 		sinceBlock?: bigint;
+		sinceTimestamp?: Date;
 	}): Promise<NormalizedTransaction[]>;
+	/** Highest chain position covered by the most recent completed discovery scan. */
+	scanCursor?(): bigint | undefined;
 	/**
 	 * Optional bounded push path. Adapters expose this only when the provider
 	 * supports a real subscription transport; polling remains the fallback.

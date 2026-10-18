@@ -11,6 +11,18 @@ describe("Aptos adapter", () => {
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 	});
+	it("sends the configured bearer credential", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(graphql([]));
+		vi.stubGlobal("fetch", fetchMock);
+		await new AptosAdapter({
+			indexerUrl: "https://api.mainnet.aptoslabs.com/v1/graphql",
+			apiKey: "read-only",
+			tokens: { USDT: { assetType, decimals: 6 } },
+		}).findTransactions({ address: owner, assetCode: "USDT" });
+		expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+			authorization: "Bearer read-only",
+		});
+	});
 	it("normalizes finalized fungible asset deposits", async () => {
 		vi.stubGlobal(
 			"fetch",

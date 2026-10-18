@@ -589,6 +589,24 @@ function ChainConnectionForm({
 					required: true,
 					fieldProps: { type: "number", min: 0, max: 10000 },
 				},
+				{
+					name: "apiKey",
+					label: m.infrastructure_provider_api_key(),
+					valueType: "text" as const,
+					fieldProps: {
+						type: "password",
+						placeholder: connection.has_api_key ? "••••••••" : undefined,
+					},
+				},
+				...(connection.has_api_key
+					? [
+							{
+								name: "clearApiKey",
+								label: m.common_delete(),
+								valueType: "switch" as const,
+							},
+						]
+					: []),
 				...(isEvmRail(connection.rail_code) ? evmScanConfigSchemaFields() : []),
 			]}
 			initialValues={{
@@ -615,6 +633,10 @@ function ChainConnectionForm({
 							| "websocket",
 						endpoint: String(values.endpoint ?? ""),
 						priority: Number(values.priority ?? 100),
+						...(String(values.apiKey ?? "").trim()
+							? { apiKey: String(values.apiKey).trim() }
+							: {}),
+						...(values.clearApiKey ? { clearApiKey: true } : {}),
 						...(isEvmRail(connection.rail_code)
 							? evmScanConfigValues(values)
 							: {}),

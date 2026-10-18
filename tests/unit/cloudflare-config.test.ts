@@ -125,7 +125,7 @@ if (tool === "vite" && process.env.WORKERS_CI === "1") {
 				queue: "gmpay-edge-payments",
 				max_batch_size: 10,
 				max_batch_timeout: 1,
-				max_concurrency: 2,
+				max_concurrency: 1,
 				max_retries: 5,
 				retry_delay: 15,
 				dead_letter_queue: "gmpay-edge-payments-dlq",

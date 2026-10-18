@@ -85,6 +85,20 @@
       "when": 1787992432795,
       "tag": "0011_parched_enchantress",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1789632000000,
+      "tag": "0012_remove_expired_payment_scans",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1789632000001,
+      "tag": "0013_provider_rate_limit_state",
+      "breakpoints": true
     }
   ]
 }

@@ -100,7 +100,7 @@ const defaults: Record<SettingKey, SettingValue> = {
 	"security.allowed_hosts": [],
 	"webhooks.max_attempts": 8,
 	"webhooks.timeout_ms": 10_000,
-	"payments.scan_batch_size": 100,
+	"payments.scan_batch_size": 20,
 	"payments.scan_interval_ms": 60_000,
 	"payments.webhook_recovery_interval_ms": 15 * 60_000,
 	"retention.cleanup_interval_ms": 86_400_000,

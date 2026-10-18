@@ -112,10 +112,10 @@ describe("maintenance hot-query rows read", () => {
 			db
 				.prepare(
 					`SELECT id FROM orders INDEXED BY ${indexName}
-					 WHERE status IN ('pending', 'confirming', 'partially_paid', 'paid', 'overpaid', 'expired')
+					 WHERE status IN ('pending', 'confirming', 'partially_paid', 'paid', 'overpaid')
 					 AND ((status IN ('pending', 'confirming', 'partially_paid') AND expires_at > 0)
 					  OR (status IN ('paid', 'overpaid') AND paid_at >= 0)
-					  OR (status = 'expired' AND updated_at >= 0))
+					 )
 					 ORDER BY last_payment_scan_at, created_at, id LIMIT 10`,
 				)
 				.all<{ id: string }>();

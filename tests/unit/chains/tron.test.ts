@@ -19,6 +19,83 @@ describe("TRON adapters", () => {
 		expect(adapter.validateAddress(address)).toBe(true);
 		expect(adapter.validateAddress("0x1234")).toBe(false);
 	});
+	it("sends the TronGrid credential on health and TRC20 scan requests", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse(nowBlock(100)))
+			.mockResolvedValueOnce(jsonResponse({ data: [] }));
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(
+			new TronAdapter({
+				apiUrl: "https://api.trongrid.io",
+				apiKey: "read-only-key",
+			}).healthCheck(),
+		).resolves.toMatchObject({ healthy: true });
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		for (const call of fetchMock.mock.calls)
+			expect((call[1] as RequestInit).headers).toMatchObject({
+				"TRON-PRO-API-KEY": "read-only-key",
+			});
+		expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+			"/transactions/trc20?",
+		);
+	});
+	it("accepts a bounded initial page with a next fingerprint", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse(nowBlock(100)))
+			.mockResolvedValueOnce(
+				jsonResponse({
+					success: true,
+					data: [],
+					meta: { fingerprint: "next-page" },
+				}),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(
+			new TronAdapter({ apiUrl: "https://api.trongrid.io" }).findTransactions({
+				address,
+				assetCode: "USDT",
+			}),
+		).resolves.toEqual([]);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+	it("bounds cursor recovery by the order creation timestamp", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse(nowBlock(100)))
+			.mockResolvedValueOnce(jsonResponse({ data: [] }));
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(
+			new TronAdapter({ apiUrl: "https://api.trongrid.io" }).findTransactions({
+				address,
+				assetCode: "USDT",
+				sinceBlock: 1n,
+				sinceTimestamp: new Date(1_700_000_300_000),
+			}),
+		).resolves.toEqual([]);
+		expect(String(fetchMock.mock.calls[1]?.[0])).toContain(
+			"min_timestamp=1700000000000",
+		);
+	});
+	it("classifies TronGrid frequency-limit 403 responses as rate limits", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi
+				.fn()
+				.mockResolvedValue(
+					jsonResponse({ Error: "The key exceeds the frequency limit" }, 403),
+				),
+		);
+		const adapter = new TronAdapter({ apiUrl: "https://api.trongrid.io" });
+		let caught: unknown;
+		try {
+			await adapter.findTransactions({ address, assetCode: "USDT" });
+		} catch (error) {
+			caught = error;
+		}
+		expect(adapter.classifyError(caught)).toBe("rate_limit");
+	});
 	it("provides deterministic simulated payments", async () => {
 		const adapter = new MockTronAdapter();
 		adapter.record({
@@ -154,7 +231,8 @@ describe("TRON adapters", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const transactions = await new TronAdapter({
 			apiUrl: "https://api.trongrid.io",
-		}).findTransactions({ address, assetCode: "USDT" });
+			maxPages: 2,
+		}).findTransactions({ address, assetCode: "USDT", sinceBlock: 1n });
 		expect(transactions.map((transaction) => transaction.hash)).toEqual([
 			"page-1",
 			"page-2",
@@ -186,9 +264,13 @@ describe("TRON adapters", () => {
 				),
 		);
 		await expect(
-			new TronAdapter({ apiUrl: "https://api.trongrid.io" }).findTransactions({
+			new TronAdapter({
+				apiUrl: "https://api.trongrid.io",
+				maxPages: 2,
+			}).findTransactions({
 				address,
 				assetCode: "USDT",
+				sinceBlock: 0n,
 			}),
 		).rejects.toThrow("repeated");
 	});

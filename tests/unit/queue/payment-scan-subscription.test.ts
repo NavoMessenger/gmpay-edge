@@ -132,12 +132,37 @@ describe("payment scan WSS consumption", () => {
 			),
 		).resolves.toEqual([transaction]);
 		expect(healthWrites).toContainEqual([
-			"unhealthy",
 			expect.any(Number),
 			"network",
+			false,
+			null,
+			false,
+			false,
+			null,
+			"network",
+			expect.any(Number),
 			expect.any(Number),
 			"connection-ethereum-wss",
 		]);
+	});
+
+	it("skips address discovery and WSS for a paid-order refresh", async () => {
+		const adapter = {
+			findTransactions: vi.fn().mockResolvedValue([]),
+			subscribeTransactions: vi.fn().mockResolvedValue({ reconnects: 0 }),
+			getTransaction: vi.fn(),
+		};
+
+		await expect(
+			scanTransactions(
+				emptyPaymentsDb(),
+				{ ...message(payment().to), refreshOnly: true },
+				"USDT",
+				adapter as never,
+			),
+		).resolves.toEqual([]);
+		expect(adapter.findTransactions).not.toHaveBeenCalled();
+		expect(adapter.subscribeTransactions).not.toHaveBeenCalled();
 	});
 });
 

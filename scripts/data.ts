@@ -206,7 +206,17 @@ export async function importCloudflareData({
 		await mkdir(staging, { recursive: true });
 		const database = openDataDatabase(layout.database);
 		try {
+			// D1 exports write table data in table order, which can place a child
+			// table before its referenced parent. Importing is isolated in a fresh
+			// staging directory, so defer foreign-key checks and durable journaling
+			// until the complete export has been loaded and validated.
+			database.run("PRAGMA foreign_keys = OFF");
+			database.run("PRAGMA journal_mode = OFF");
+			database.run("PRAGMA synchronous = OFF");
 			database.run(await readFile(d1Sql, "utf8"));
+			database.run("PRAGMA journal_mode = WAL");
+			database.run("PRAGMA synchronous = FULL");
+			database.run("PRAGMA foreign_keys = ON");
 			const migrations = await loadNodeMigrations();
 			seedNodeMigrations(database, migrations);
 			validateDatabase(database, migrations);

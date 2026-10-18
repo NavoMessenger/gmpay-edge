@@ -528,6 +528,44 @@ describe("D1 payment processing flow", () => {
 		});
 	});
 
+	it("does not attribute an unrelated transfer to an expired order sharing its address", async () => {
+		const now = Date.now();
+		const target = "TLateIsolated111111111111111111111111";
+		await insertOrderWithSnapshot(db, {
+			id: "order-expired-isolated",
+			externalOrderId: "merchant-order-expired-isolated",
+			status: "expired",
+			target,
+			expiresAt: now - 1,
+			version: 1,
+			now,
+		});
+
+		await expect(
+			processScannedTransactions(
+				env,
+				"order-expired-isolated",
+				[
+					transaction({
+						hash: "tx-for-another-instance",
+						to: target,
+						amountUnits: 12_389_000n,
+						confirmations: 2,
+					}),
+				],
+			),
+		).resolves.toEqual({
+			skippedPreviouslyAttributed: 0,
+			skippedAmbiguous: 1,
+		});
+		await expect(
+			db
+				.prepare("SELECT COUNT(*) AS count FROM order_payments WHERE order_id = ?")
+				.bind("order-expired-isolated")
+				.first<{ count: number }>(),
+		).resolves.toEqual({ count: 0 });
+	});
+
 	it("rolls back every side effect when concurrent payment updates lose the version race", async () => {
 		const now = Date.now();
 		await insertOrderWithSnapshot(db, {

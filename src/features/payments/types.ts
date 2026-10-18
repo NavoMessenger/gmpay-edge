@@ -5,6 +5,18 @@ export interface PaymentScanMessage {
 	orderId: string;
 }
 
+/**
+ * A scheduled scan batch intentionally uses one Queue message for several
+ * orders.  Queue billing is per message (not per sendBatch invocation), so
+ * emitting one message per order every minute can exhaust the free daily
+ * Queue allowance while preserving no additional scan timeliness.
+ */
+export interface PaymentScanBatchMessage {
+	kind: "payment.scan_batch";
+	version: 1;
+	orders: Array<Pick<PaymentScanMessage, "receivingMethodId" | "orderId">>;
+}
+
 export interface PaymentProviderEventMessage {
 	kind: "payment.provider_event";
 	version: 1;
@@ -31,6 +43,7 @@ export interface PaymentEventSourceReconcileMessage {
 
 export type PaymentQueueMessage =
 	| PaymentScanMessage
+	| PaymentScanBatchMessage
 	| PaymentProviderEventMessage
 	| PaymentRateSyncMessage
 	| PaymentRpcHealthMessage

@@ -86,10 +86,12 @@ describe("hot list query plans", () => {
 			`SELECT o.id
 			 FROM orders o INDEXED BY orders_payment_scan_idx
 			 CROSS JOIN order_payment_snapshots ops ON ops.order_id = o.id
-			 WHERE o.status IN ('pending','confirming','partially_paid','paid','overpaid','expired')
+				 WHERE o.status IN ('pending','confirming','partially_paid','paid','overpaid')
 			 AND ((o.status IN ('pending','confirming','partially_paid') AND o.expires_at > 0)
-			  OR (o.status IN ('paid','overpaid') AND o.paid_at >= 0)
-			  OR (o.status = 'expired' AND o.updated_at >= 0))
+			  OR (o.status IN ('paid','overpaid') AND o.paid_at >= 0
+			   AND EXISTS(SELECT 1 FROM order_payments op
+			    WHERE op.order_id = o.id AND op.status IN ('detected','confirming')))
+				 )
 			 ORDER BY o.last_payment_scan_at, o.created_at, o.id LIMIT 100`,
 		);
 
@@ -101,6 +103,9 @@ describe("hot list query plans", () => {
 			"SCAN al USING COVERING INDEX audit_logs_created_idx",
 		);
 		expect(scans).toContain("SCAN o USING INDEX orders_payment_scan_idx");
+		expect(scans).toContain(
+			"SEARCH op USING INDEX order_payments_order_idx (order_id=?)",
+		);
 		for (const details of [review, webhook, audit, scans])
 			expect(details).not.toContain("USE TEMP B-TREE");
 	});
