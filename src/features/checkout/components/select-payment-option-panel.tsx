@@ -1,6 +1,10 @@
 import { ArrowLeft, Building2, Link2, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
-import { AssetLabel, NetworkLabel } from "#/components/crypto-icons/labels";
+import {
+	AssetLabel,
+	NetworkLabel,
+	ProviderLabel,
+} from "#/components/crypto-icons/labels";
 import { Button } from "#/components/ui/button";
 import {
 	Select,
@@ -36,34 +40,31 @@ export function SelectPaymentOptionPanel({
 	options: Option[];
 	unavailableReason?: "rate_unavailable" | "payment_method_unavailable" | null;
 }) {
-	const kinds = [...new Set(options.map((option) => option.railKind))];
+	const [preferredAsset, setAsset] = useState("");
 	const [preferredKind, setKind] = useState<RailKind | "">("");
 	const [preferredNetwork, setNetwork] = useState("");
-	const [preferredAsset, setAsset] = useState("");
+	const assets = [...new Set(options.map((option) => option.asset))];
+	const asset =
+		assets.find((value) => value === preferredAsset) ?? assets[0] ?? "";
+	const assetOptions = options.filter((option) => option.asset === asset);
+	const kinds = [...new Set(assetOptions.map((option) => option.railKind))];
 	const kind = kinds.find((value) => value === preferredKind) ?? kinds[0] ?? "";
-	const kindOptions = options.filter((option) => option.railKind === kind);
-	const networks = [
-		...new Map(
-			kindOptions.map((option) => [
-				option.network,
-				{ id: option.network, name: option.networkName },
-			]),
-		).values(),
-	];
-	const network =
-		networks.find((value) => value.id === preferredNetwork)?.id ??
-		networks[0]?.id ??
-		"";
-	const assets = kindOptions.filter((option) => option.network === network);
+	const networkOptions = new Map<string, Option>();
+	for (const option of assetOptions) {
+		if (option.railKind === kind && !networkOptions.has(option.network))
+			networkOptions.set(option.network, option);
+	}
+	const networks = [...networkOptions.values()];
 	const selected =
-		assets.find((option) => option.asset === preferredAsset) ?? assets[0];
-	const paymentMethodId = selected?.paymentMethodId ?? "";
+		networks.find((option) => option.network === preferredNetwork) ??
+		networks[0];
+	const network = selected?.network ?? "";
 
 	useEffect(() => {
+		setAsset(asset);
 		setKind(kind);
 		setNetwork(network);
-		setAsset(selected?.asset ?? "");
-	}, [kind, network, selected?.asset]);
+	}, [asset, kind, network]);
 
 	return (
 		<section className="w-full pb-4">
@@ -111,17 +112,44 @@ export function SelectPaymentOptionPanel({
 				</div>
 			) : (
 				<>
+					<div className="mb-4 min-w-0">
+						<p className="mb-1.5 font-semibold text-muted-foreground text-xs uppercase tracking-wider">
+							{m.common_currency()}
+						</p>
+						<Select
+							disabled={busy || !assets.length}
+							onValueChange={setAsset}
+							value={asset}
+						>
+							<SelectTrigger
+								aria-label={m.common_currency()}
+								className="h-12.5 w-full rounded-xl bg-card"
+							>
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent position="popper">
+								{assets.map((symbol) => (
+									<SelectItem key={symbol} value={symbol}>
+										<AssetLabel
+											label={symbol}
+											network=""
+											networkIndependent
+											symbol={symbol}
+										/>
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
 					{kinds.length > 1 ? (
 						<div className="mb-4 grid grid-cols-3 gap-2">
 							{kinds.map((value) => (
 								<Button
 									className="h-auto min-h-16 flex-col gap-1 rounded-xl px-2 py-2"
 									key={value}
-									onClick={() => {
-										setKind(value);
-										setNetwork("");
-									}}
+									onClick={() => setKind(value)}
 									disabled={busy}
+									aria-pressed={kind === value}
 									variant={kind === value ? "default" : "outline"}
 								>
 									{kindIcon(value)}
@@ -130,70 +158,42 @@ export function SelectPaymentOptionPanel({
 							))}
 						</div>
 					) : null}
-					<div className="mb-4 grid grid-cols-2 gap-2">
-						<div className="min-w-0">
-							<p className="mb-1.5 font-semibold text-muted-foreground text-xs uppercase tracking-wider">
-								{kindLabel(kind)}
-							</p>
-							<Select
-								disabled={busy || !networks.length}
-								onValueChange={setNetwork}
-								value={network}
+
+					<div className="mb-4 min-w-0">
+						<p className="mb-1.5 font-semibold text-muted-foreground text-xs uppercase tracking-wider">
+							{kindLabel(kind)}
+						</p>
+						<Select
+							disabled={busy || !networks.length}
+							onValueChange={setNetwork}
+							value={network}
+						>
+							<SelectTrigger
+								aria-label={kindLabel(kind)}
+								className="h-12.5 w-full rounded-xl bg-card"
 							>
-								<SelectTrigger
-									aria-label={kindLabel(kind)}
-									className="h-12.5 w-full rounded-xl bg-card"
-								>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent position="popper">
-									{networks.map((method) => (
-										<SelectItem key={method.id} value={method.id}>
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent position="popper">
+								{networks.map((option) => (
+									<SelectItem key={option.network} value={option.network}>
+										{option.railKind === "exchange" ||
+										option.railKind === "wallet" ? (
+											<ProviderLabel
+												kind={option.railKind}
+												name={option.networkName}
+												provider={option.network}
+											/>
+										) : (
 											<NetworkLabel
-												displayName={method.name}
-												network={method.id}
-											/>
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
-						<div className="min-w-0">
-							<p className="mb-1.5 font-semibold text-muted-foreground text-xs uppercase tracking-wider">
-								{m.common_currency()}
-							</p>
-							<Select
-								disabled={busy || !assets.length}
-								onValueChange={(value) =>
-									setAsset(
-										assets.find((option) => option.paymentMethodId === value)
-											?.asset ?? "",
-									)
-								}
-								value={paymentMethodId}
-							>
-								<SelectTrigger
-									aria-label={m.common_currency()}
-									className="h-12.5 w-full rounded-xl bg-card"
-								>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent position="popper">
-									{assets.map((option) => (
-										<SelectItem
-											key={option.paymentMethodId}
-											value={option.paymentMethodId}
-										>
-											<AssetLabel
-												label={option.asset}
+												displayName={option.networkName}
 												network={option.network}
-												symbol={option.asset}
 											/>
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						</div>
+										)}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
 					</div>
 					{selected ? (
 						<div className="mb-4 rounded-xl bg-muted/30 p-3 text-sm">
