@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { type ComponentProps, useState } from "react";
 import { toast } from "sonner";
 import {
 	AssetLabel,
@@ -228,6 +228,7 @@ export function ReceivingMethodsPage() {
 				description={m.receiving_methods_description()}
 				schema={[
 					{ name: "name", label: m.common_name(), required: true },
+					...okpayEditFields(editingMethod),
 					{
 						name: "minAmount",
 						label: `${m.pro_field_minimumValue()} (USD)`,
@@ -241,6 +242,8 @@ export function ReceivingMethodsPage() {
 					editingMethod
 						? {
 								name: editingMethod.name,
+								shopId: editingMethod.target_value,
+								apiKey: "",
 								minAmount: editingMethod.min_amount ?? "",
 								maxAmount: editingMethod.max_amount ?? "",
 							}
@@ -248,14 +251,23 @@ export function ReceivingMethodsPage() {
 				}
 				onFinish={async (values) => {
 					if (!editingMethod) return;
-					await updateReceivingMethodFn({
+					const result = await updateReceivingMethodFn({
 						data: {
 							id: editingMethod.id,
+							...(editingMethod.rail_code === "okpay"
+								? {
+										configuration: {
+											shopId: String(values.shopId ?? ""),
+											apiKey: String(values.apiKey ?? ""),
+										},
+									}
+								: {}),
 							name: String(values.name ?? ""),
 							minAmount: optionalString(values.minAmount),
 							maxAmount: optionalString(values.maxAmount),
 						},
 					});
+					if (!result.saved) throw result;
 					setEditingMethod(null);
 					await client.invalidateQueries({
 						queryKey: ["admin", "receiving-methods"],
@@ -281,6 +293,30 @@ export function ReceivingMethodsPage() {
 			/>
 		</Main>
 	);
+}
+
+function okpayEditFields(
+	method: MethodRow | null,
+): NonNullable<ComponentProps<typeof ModalForm>["schema"]> {
+	if (method?.rail_code !== "okpay") return [];
+	return [
+		{
+			name: "shopId",
+			label: m.receiving_okpay_shop_id(),
+			required: true,
+			description: m.receiving_okpay_id_help(),
+		},
+		{
+			name: "apiKey",
+			label: m.infrastructure_provider_api_key(),
+			valueType: "password",
+			description: m.receiving_okpay_edit_help(),
+			fieldProps: {
+				placeholder: m.settings_secret_configured(),
+				autoComplete: "new-password",
+			},
+		},
+	];
 }
 
 function CreateReceivingMethodForm({

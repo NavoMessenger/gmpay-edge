@@ -9,6 +9,8 @@ import {
 import { adminContext } from "#/features/payment-settings/server/admin-context";
 import { deleteReceivingMethod } from "#/features/payment-settings/server/delete-receiving-method";
 import { parseReceivingProviderConfiguration } from "#/features/payment-settings/server/provider-config";
+import { updateReceivingMethod } from "#/features/payment-settings/server/update-receiving-method";
+import { DomainError } from "#/lib/domain-error";
 import { unitsToDecimal } from "#/lib/money";
 import { encryptSecret } from "#/lib/secrets";
 
@@ -289,7 +291,19 @@ export const createReceivingMethodFn = createServerFn({ method: "POST" })
 
 const updateReceivingMethodInput = createReceivingMethodInput
 	.pick({ name: true, minAmount: true, maxAmount: true })
-	.extend({ id: z.string().trim().min(1).max(100) });
+	.extend({
+		id: z.string().trim().min(1).max(100),
+		configuration: z
+			.object({
+				shopId: z
+					.string()
+					.trim()
+					.regex(/^[1-9]\d*$/)
+					.max(100),
+				apiKey: z.string().trim().max(512).optional(),
+			})
+			.optional(),
+	});
 
 export const updateReceivingMethodFn = createServerFn({ method: "POST" })
 	.validator((input: z.input<typeof updateReceivingMethodInput>) =>
@@ -299,61 +313,21 @@ export const updateReceivingMethodFn = createServerFn({ method: "POST" })
 		const context = await adminContext(
 			systemPermission("receiving_methods", "update"),
 		);
-		const current = await context.db
-			.prepare(
-				`SELECT name, min_amount_minor, max_amount_minor
-				 FROM receiving_methods WHERE id = ?`,
-			)
-			.bind(data.id)
-			.first<{
-				name: string;
-				min_amount_minor: string | null;
-				max_amount_minor: string | null;
-			}>();
-		if (!current) throw paymentSettingsError("receiving_method_not_found");
-		const limits = parseReceivingUsdLimits(data.minAmount, data.maxAmount);
-		const minAmountMinor = limits.min?.toString() ?? null;
-		const maxAmountMinor = limits.max?.toString() ?? null;
-		const limitsChanged =
-			current.min_amount_minor !== minAmountMinor ||
-			current.max_amount_minor !== maxAmountMinor;
-		const now = Date.now();
-		await context.db.batch([
-			context.db
-				.prepare(
-					`UPDATE receiving_methods SET name = ?, min_amount_minor = ?,
-					 max_amount_minor = ?, updated_at = ? WHERE id = ?`,
-				)
-				.bind(data.name, minAmountMinor, maxAmountMinor, now, data.id),
-			context.db
-				.prepare(
-					`INSERT INTO audit_logs
-					 (id, actor_user_id, action, target_type, target_id, request_id,
-					  ip_address, before, after, created_at)
-					 VALUES (?, ?, 'receiving_method.updated', 'receiving_method',
-					  ?, ?, ?, ?, ?, ?)`,
-				)
-				.bind(
-					crypto.randomUUID(),
-					context.user.id,
-					data.id,
-					context.request.headers.get("x-request-id"),
-					context.request.headers.get("cf-connecting-ip"),
-					JSON.stringify({
-						name: current.name,
-						minAmountMinor: current.min_amount_minor,
-						maxAmountMinor: current.max_amount_minor,
-					}),
-					JSON.stringify({
-						name: data.name,
-						minAmountMinor,
-						maxAmountMinor,
-						limitsChanged,
-					}),
-					now,
-				),
-		]);
-		return { id: data.id, limitsChanged };
+		try {
+			const result = await updateReceivingMethod(context.db, data, {
+				integrationConfigSecret: context.runtime.integrationConfigSecret,
+				actorUserId: context.user.id,
+				requestId: context.request.headers.get("x-request-id"),
+				ipAddress: context.request.headers.get("cf-connecting-ip"),
+			});
+			return { saved: true as const, ...result };
+		} catch (error) {
+			// Return expected domain failures as data: Error serialization drops
+			// custom properties in the client transport.
+			if (error instanceof DomainError)
+				return { saved: false as const, code: error.code };
+			throw error;
+		}
 	});
 
 export const deleteReceivingMethodFn = createServerFn({ method: "POST" })

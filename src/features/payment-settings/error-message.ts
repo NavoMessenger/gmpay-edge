@@ -26,6 +26,10 @@ export function paymentSettingsOperationErrorMessage(error: unknown) {
 			return m.payment_settings_error_invalid_limits();
 		case "receiving_method_configuration_required":
 			return m.receiving_configuration_required();
+		case "receiving_method_provider_authentication_failed":
+			return m.receiving_provider_verification_failed();
+		case "receiving_method_configuration_conflict":
+			return m.receiving_configuration_conflict();
 		case "receiving_method_not_ready":
 			return m.payment_settings_error_receiving_method_not_ready();
 		case "exchange_rate_not_found":

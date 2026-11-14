@@ -328,6 +328,8 @@ The connection configuration stores the API address. Each receiving method store
 
 The default API address is `https://api.okaypay.me/shop`. GMPay Edge creates a hosted payment URL, stores the provider order ID, validates signed callbacks, and also polls transfer status. The public callback is `/api/providers/okpay/notify`. The callback does not trust order status, amount, asset, shop identity, or signature supplied by the client without adapter validation.
 
+The receiving-method **Edit** dialog supports changing the OKPay Shop ID (merchant App ID) and API Key (the matching merchant token). The stored token is never returned to the browser; leave its field blank to keep it. A different Shop ID requires a new token. Replacement credentials must pass a signed, read-only balance check before the atomic update and redacted audit entry commit. Verification failure retains the existing configuration. A shop with an allocated pending/confirming/partially paid order or a saved hosted order cannot change its Shop ID; create another receiving method for a different shop. Same-shop token rotation remains available. Concurrent credential edits are rejected; refresh before retrying.
+
 Built-in connection templates without verified credentials remain disabled. Configure any required API key, run the live health check, and only then enable an operational receiving method. Seeded support metadata is not evidence that a deployment is ready to accept funds.
 
 Receiving-method amount locks also have a reuse quarantine. Completing, cancelling,

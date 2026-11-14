@@ -11,6 +11,8 @@ export type PaymentSettingsErrorCode =
 	| "receiving_method_not_found"
 	| "receiving_method_invalid_limits"
 	| "receiving_method_configuration_required"
+	| "receiving_method_provider_authentication_failed"
+	| "receiving_method_configuration_conflict"
 	| "receiving_method_not_ready"
 	| "exchange_rate_not_found"
 	| "fiat_rate_credentials_required";
@@ -58,6 +60,15 @@ const errorDefinitions: Record<
 	receiving_method_configuration_required: {
 		status: 422,
 		message: "Receiving method configuration is required",
+	},
+	receiving_method_provider_authentication_failed: {
+		status: 409,
+		message: "Provider credential verification failed",
+	},
+	receiving_method_configuration_conflict: {
+		status: 409,
+		message:
+			"Receiving configuration changed or is referenced by hosted orders",
 	},
 	receiving_method_not_ready: {
 		status: 409,

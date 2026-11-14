@@ -32,6 +32,8 @@ describe("payment settings Server Function error contract", () => {
 		["receiving_method_invalid_limits", 422],
 		["receiving_method_configuration_required", 422],
 		["receiving_method_not_ready", 409],
+		["receiving_method_provider_authentication_failed", 409],
+		["receiving_method_configuration_conflict", 409],
 		["exchange_rate_not_found", 404],
 		["fiat_rate_credentials_required", 422],
 	] satisfies Array<
@@ -77,6 +79,14 @@ describe("payment settings Server Function error contract", () => {
 		[
 			"receiving_method_not_ready",
 			m.payment_settings_error_receiving_method_not_ready(),
+		],
+		[
+			"receiving_method_provider_authentication_failed",
+			m.receiving_provider_verification_failed(),
+		],
+		[
+			"receiving_method_configuration_conflict",
+			m.receiving_configuration_conflict(),
 		],
 		["exchange_rate_not_found", m.payment_settings_error_rate_not_found()],
 		[
