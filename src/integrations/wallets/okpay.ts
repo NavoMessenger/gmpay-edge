@@ -35,6 +35,33 @@ const responseSchema = z.looseObject({
 	msg: z.string().optional(),
 	sign: z.string().optional(),
 });
+// Only public, fixed messages from the official contract may enter logs.
+// They are diagnostic data; classification and payment decisions do not use them.
+const rejectionDiagnosticSchema = z.object({
+	status: z.enum(["warning", "error", "unrecognized"]).catch("unrecognized"),
+	code: z
+		.union([
+			z.number().int().min(0).max(999_999),
+			z.string().regex(/^\d{1,6}$/),
+		])
+		.optional()
+		.catch(undefined),
+	msg: z
+		.enum([
+			"unrecognized",
+			"身份认证失败",
+			"未授权",
+			"请求已过期, 请检查 timestamp",
+			"请求重复 (nonce 已使用)",
+			"缺少有效的 timestamp 参数",
+			"缺少有效的 nonce 参数 (8-128 位字符串)",
+			"amount(金额)不合法",
+			"unique_id 重复",
+			"callback_url 参数验证失败或存在安全风险",
+			"订单不存在!",
+		])
+		.catch("unrecognized"),
+});
 const successResponseSchema = z.looseObject({
 	status: z.literal("success"),
 	code: z.union([z.literal(200), z.literal("200")]),
@@ -297,7 +324,14 @@ export class OkPayAdapter implements PaymentAdapter<OkPayConfig> {
 				signal: AbortSignal.timeout(this.config.timeoutMs),
 			},
 		);
-		if (!response.ok) throw new OkPayHttpError(response.status);
+		if (!response.ok) {
+			console.warn({
+				event: "okpay_request_rejected",
+				operation: path,
+				httpStatus: response.status,
+			});
+			throw new OkPayHttpError(response.status);
+		}
 		let decoded: unknown;
 		try {
 			decoded = await response.json();
@@ -305,8 +339,18 @@ export class OkPayAdapter implements PaymentAdapter<OkPayConfig> {
 			throw new OkPayInvalidResponseError();
 		}
 		const payload = responseSchema.parse(decoded);
-		if (payload.status !== "success")
+		if (payload.status !== "success") {
+			const diagnostic = rejectionDiagnosticSchema.parse(payload);
+			console.warn({
+				event: "okpay_request_rejected",
+				operation: path,
+				httpStatus: response.status,
+				providerStatus: diagnostic.status,
+				providerCode: diagnostic.code ?? null,
+				providerMessage: diagnostic.msg,
+			});
 			throw new OkPayHttpError(normalizeStatus(payload.code));
+		}
 		const success = successResponseSchema.parse(payload);
 		if (!this.verifyCallback(success)) throw new OkPayInvalidResponseError();
 		return success;

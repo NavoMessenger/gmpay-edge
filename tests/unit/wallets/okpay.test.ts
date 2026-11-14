@@ -263,6 +263,101 @@ describe("OKPay adapter", () => {
 		});
 	});
 
+	it.each([
+		"身份认证失败",
+		"未授权",
+		"请求已过期, 请检查 timestamp",
+		"请求重复 (nonce 已使用)",
+		"缺少有效的 timestamp 参数",
+		"缺少有效的 nonce 参数 (8-128 位字符串)",
+	])("records documented provider rejection %s without changing classification", async (msg) => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(Response.json({ status: "warning", msg })),
+		);
+		await expect(adapter().healthCheck()).resolves.toMatchObject({
+			healthy: false,
+			detail: "OKPay health check failed: permanent",
+		});
+		expect(warn).toHaveBeenCalledWith({
+			event: "okpay_request_rejected",
+			operation: "balance",
+			httpStatus: 200,
+			providerStatus: "warning",
+			providerCode: null,
+			providerMessage: msg,
+		});
+	});
+	it("drops arbitrary provider details, status and credential-bearing codes at the logging boundary", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				Response.json({
+					status: "secret",
+					code: "token=secret",
+					msg: "身份认证失败 token=secret https://private.example",
+					data: { apiKey: "secret" },
+					id: "12345",
+					sign: "private-signature",
+				}),
+			),
+		);
+		await adapter().healthCheck();
+		expect(warn).toHaveBeenCalledWith({
+			event: "okpay_request_rejected",
+			operation: "balance",
+			httpStatus: 200,
+			providerStatus: "unrecognized",
+			providerCode: null,
+			providerMessage: "unrecognized",
+		});
+		expect(JSON.stringify(warn.mock.calls)).not.toMatch(/secret|private|12345/);
+	});
+	it("retains bounded numeric error codes and error status", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				Response.json({
+					status: "error",
+					code: "429",
+					msg: "unique_id 重复",
+				}),
+			),
+		);
+		await expect(adapter().healthCheck()).resolves.toMatchObject({
+			healthy: false,
+			detail: "OKPay health check failed: rate_limit",
+		});
+		expect(warn).toHaveBeenCalledWith(
+			expect.objectContaining({
+				providerStatus: "error",
+				providerCode: "429",
+				providerMessage: "unique_id 重复",
+			}),
+		);
+	});
+	it("logs HTTP rejection metadata without reading or logging a non-JSON response body", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const response = new Response("credential=secret https://private.example", {
+			status: 403,
+		});
+		const json = vi.spyOn(response, "json");
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+		await expect(adapter().healthCheck()).resolves.toMatchObject({
+			healthy: false,
+			detail: "OKPay health check failed: authentication",
+		});
+		expect(warn).toHaveBeenCalledWith({
+			event: "okpay_request_rejected",
+			operation: "balance",
+			httpStatus: 403,
+		});
+		expect(json).not.toHaveBeenCalled();
+	});
+
 	it("rejects a forged successful provider response", async () => {
 		vi.stubGlobal(
 			"fetch",

@@ -178,6 +178,8 @@ Worker 已返回或 Queue 暂时失败也不会丢失；定时维护会恢复到
 
 默认 API 为 `https://api.okaypay.me/shop`。系统创建托管支付 URL、保存供应商订单号、校验签名回调并轮询状态。公共回调为 `/api/providers/okpay/notify`；客户端传入的状态、金额、资产、Shop 身份和签名必须再次经适配器验证。
 
+OKPay 拒绝请求时记录 `okpay_request_rejected` 事件，包含操作和 HTTP 状态；已解析的业务拒绝还包含 `providerStatus`、`providerCode`、`providerMessage`。仅保留 OKPay 官方文档中的固定公开错误提示与长度受限的数字错误码；未知内容记为 `unrecognized` 或 `null`。不记录凭据、签名、请求字段、响应正文或账户/订单标识。提示文本只用于诊断，不控制重试、鉴权或支付状态。通用的验证失败不能证明存在 IP 限制，应查看实际拒绝事件；官方协议中的 IP 白名单限制以商户配置了白名单为前提。
+
 收款方式的**编辑**窗口支持修改 OKPay Shop ID（商户 App ID）与 API Key（对应商户 token）。已保存的 token 不会返回浏览器；留空保留原值。更换 Shop ID 必须同时填写新 token。替换凭据先通过带签名的只读余额查询，再原子提交配置与脱敏审计；验证失败保留原配置。商户存在已分配的待支付、确认中、部分支付订单，或已保存托管订单时，不能更换 Shop ID，应为其他商户新建收款方式；同一商户仍可轮换 token。并发修改凭据会被拒绝，请刷新后重试。
 
 ## 地址锁与迟到付款
