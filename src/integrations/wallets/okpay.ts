@@ -18,7 +18,7 @@ import { decimalPlaces, decimalToUnits } from "#/lib/money";
 
 const configSchema = z.object({
 	shopId: z.string().trim().min(1),
-	apiKey: z.string().trim().min(1),
+	apiKey: z.string().min(1),
 	apiUrl: z.url().default("https://api.okaypay.me/shop"),
 	assetDecimals: z
 		.record(z.string(), z.number().int().min(0).max(30))
@@ -67,7 +67,7 @@ const successResponseSchema = z.looseObject({
 	code: z.union([z.literal(200), z.literal("200")]),
 	data: z.unknown(),
 	id: z.union([z.string(), z.number()]),
-	sign: z.string().regex(/^[A-F0-9]{64}$/),
+	sign: z.string().regex(/^[A-F0-9]{64}$/i),
 });
 const transferSchema = z.looseObject({
 	// OKPay amounts are decimal strings at the protocol boundary. Do not
@@ -180,9 +180,14 @@ export class OkPayAdapter implements PaymentAdapter<OkPayConfig> {
 	}
 
 	verifyCallback(input: Record<string, unknown>) {
-		if (String(input.id ?? "").trim() !== this.config.shopId) return false;
+		if (
+			typeof input.sign !== "string" ||
+			!/^[A-F0-9]{64}$/i.test(input.sign) ||
+			String(input.id ?? "").trim() !== this.config.shopId
+		)
+			return false;
 		try {
-			return constantTimeEqual(String(input.sign ?? ""), this.signature(input));
+			return constantTimeEqual(input.sign.toUpperCase(), this.signature(input));
 		} catch {
 			return false;
 		}
@@ -411,7 +416,10 @@ function isPositiveDecimal(value: string | number) {
 }
 
 function signatureBase(input: Record<string, unknown>) {
-	return flatten(input)
+	// The envelope signature is excluded; nested fields named sign remain signed.
+	const fields = { ...input };
+	delete fields.sign;
+	return [...flatten(fields)]
 		.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
 		.map(([key, value]) => `${key}=${value}`)
 		.join("&");
@@ -420,14 +428,13 @@ function signatureBase(input: Record<string, unknown>) {
 function flatten(
 	input: Record<string, unknown>,
 	prefix = "",
-): Array<[string, string]> {
-	const fields: Array<[string, string]> = [];
+	fields = new Map<string, string>(),
+): Map<string, string> {
 	for (const [key, value] of Object.entries(input)) {
-		if (key === "sign" || value === null || value === undefined || value === "")
-			continue;
+		if (value === null || value === undefined || value === "") continue;
 		const path = prefix ? `${prefix}.${key}` : key;
-		if (typeof value === "object" && !Array.isArray(value)) {
-			fields.push(...flatten(value as Record<string, unknown>, path));
+		if (typeof value === "object") {
+			flatten(value as Record<string, unknown>, path, fields);
 			continue;
 		}
 		if (
@@ -436,7 +443,9 @@ function flatten(
 			typeof value !== "boolean"
 		)
 			throw new OkPayInvalidResponseError();
-		fields.push([path, String(value)]);
+		// Colliding dotted paths have inconsistent precedence across official SDKs.
+		if (fields.has(path)) throw new OkPayInvalidResponseError();
+		fields.set(path, String(value));
 	}
 	return fields;
 }

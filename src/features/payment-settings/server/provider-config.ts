@@ -28,7 +28,7 @@ const okpayConfiguration = z.object({
 		.trim()
 		.regex(/^[1-9]\d*$/)
 		.max(100),
-	apiKey: z.string().trim().min(1).max(512),
+	apiKey: z.string().min(1).max(512),
 });
 
 export function parseReceivingProviderConfiguration(

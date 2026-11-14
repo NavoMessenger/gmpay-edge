@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OkPayAdapter } from "#/integrations/wallets/okpay";
 import createFixture from "../../fixtures/providers/okpay-create-payment.json";
 import statusFixture from "../../fixtures/providers/okpay-payment-status.json";
+import signingFixture from "../../fixtures/providers/okpay-signing-vectors.json";
 
 describe("OKPay adapter", () => {
 	afterEach(() => {
@@ -234,6 +235,177 @@ describe("OKPay adapter", () => {
 				sign: "8BC0AF979075038025DDD51B6F4A2E6CF3FF9B5B5371EB2268D303F89883E92A",
 			}),
 		).toBe(true);
+	});
+
+	it.each(signingFixture.vectors)("matches the official SDK vector $name", ({
+		input,
+		signature,
+	}) => {
+		const instance = new OkPayAdapter({
+			shopId: String(input.id),
+			apiKey: signingFixture.token,
+		});
+		expect(instance.verifyCallback({ ...input, sign: signature })).toBe(true);
+	});
+
+	it("binds nested sign fields instead of allowing unsigned additions", () => {
+		const vector = signingFixture.vectors.find(
+			({ name }) => name === "ordinary-object",
+		);
+		if (!vector) throw new Error("Missing ordinary object fixture");
+		const instance = new OkPayAdapter({
+			shopId: "10001",
+			apiKey: signingFixture.token,
+		});
+		expect(
+			instance.verifyCallback({
+				...vector.input,
+				data: { amount: "1", sign: "unsigned-field" },
+				sign: vector.signature,
+			}),
+		).toBe(false);
+	});
+
+	it.each(
+		signingFixture.collisions,
+	)("rejects ambiguous flattened paths: $name", ({ input, signature }) => {
+		const instance = new OkPayAdapter({
+			shopId: "10001",
+			apiKey: signingFixture.token,
+		});
+		expect(instance.verifyCallback({ ...input, sign: signature })).toBe(false);
+	});
+
+	it("rejects colliding paths even when the duplicate-key base has a matching HMAC", () => {
+		const input = { id: "10001", data: { amount: "1" }, "data.amount": "2" };
+		const sign = bytesToHex(
+			hmac(
+				sha256,
+				utf8ToBytes(signingFixture.token),
+				utf8ToBytes("data.amount=1&data.amount=2&id=10001"),
+			),
+		).toUpperCase();
+		const instance = new OkPayAdapter({
+			shopId: "10001",
+			apiKey: signingFixture.token,
+		});
+		expect(instance.verifyCallback({ ...input, sign })).toBe(false);
+	});
+
+	it.each([
+		undefined,
+		null,
+		123,
+		{},
+		"G".repeat(64),
+		` ${createFixture.sign}`,
+	])("rejects malformed or non-string signatures: %s", (sign) => {
+		expect(adapter().verifyCallback({ ...createFixture, sign })).toBe(false);
+	});
+
+	it.each([
+		"lowercase",
+		"mixed-case",
+	])("accepts a valid %s hexadecimal signature", (style) => {
+		const lower = createFixture.sign.toLowerCase();
+		const sign =
+			style === "lowercase"
+				? lower
+				: [...lower]
+						.map((char, index) => (index % 2 ? char.toUpperCase() : char))
+						.join("");
+		expect(adapter().verifyCallback({ ...createFixture, sign })).toBe(true);
+	});
+
+	it("rejects Unicode ligatures that uppercase into hexadecimal characters", () => {
+		const vector = signingFixture.vectors.find(
+			({ name }) => name === "official-callback",
+		);
+		if (!vector) throw new Error("Missing official callback fixture");
+		const instance = new OkPayAdapter({
+			shopId: "10001",
+			apiKey: signingFixture.token,
+		});
+		expect(
+			instance.verifyCallback({
+				...vector.input,
+				sign: vector.signature.replace("FF", "ﬀ"),
+			}),
+		).toBe(false);
+	});
+
+	it("accepts a signed array success response with a lowercase signature", async () => {
+		const vector = signingFixture.vectors.find(
+			({ name }) => name === "balance-response",
+		);
+		if (!vector) throw new Error("Missing balance fixture");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				Response.json({
+					...vector.input,
+					sign: vector.signature.toLowerCase(),
+				}),
+			),
+		);
+		const instance = new OkPayAdapter({
+			shopId: "10001",
+			apiKey: signingFixture.token,
+		});
+		await expect(instance.healthCheck()).resolves.toMatchObject({
+			healthy: true,
+		});
+	});
+
+	it("preserves the exact token bytes as the SDK does", async () => {
+		const token = " padded-test-token ";
+		const input = { id: "10001", data: { amount: "1" } };
+		const sign = bytesToHex(
+			hmac(sha256, utf8ToBytes(token), utf8ToBytes("data.amount=1&id=10001")),
+		).toUpperCase();
+		const instance = new OkPayAdapter({ shopId: "10001", apiKey: token });
+		expect(instance.config.apiKey).toBe(token);
+		expect(instance.verifyCallback({ ...input, sign })).toBe(true);
+	});
+
+	it("sends balance and payLink signatures matching the official SDK including raw special values", async () => {
+		vi.spyOn(Date, "now").mockReturnValue(1782680000000);
+		vi.spyOn(crypto, "randomUUID").mockReturnValue(
+			"00000000-0000-4000-8000-000000000000",
+		);
+		const fetchMock = vi
+			.fn()
+			.mockImplementation(async () =>
+				Response.json(signingFixture.hostedResponse),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		const instance = new OkPayAdapter({
+			shopId: "10001",
+			apiKey: signingFixture.token,
+		});
+		await expect(instance.healthCheck()).resolves.toMatchObject({
+			healthy: true,
+		});
+		await expect(
+			instance.createHostedPayment({
+				orderId: "audit-order",
+				amount: "100.50",
+				assetCode: "USDT",
+				description: "空 格+&=%汉字😀",
+				callbackUrl: "https://merchant.example/callback?a=1&b=%20",
+				returnUrl: "https://merchant.example/return?a=1&b=中 文",
+			}),
+		).resolves.toMatchObject({ providerOrderId: "fixture-order" });
+		for (const [index, name] of ["wire-balance", "wire-paylink"].entries()) {
+			const vector = signingFixture.vectors.find(
+				(entry) => entry.name === name,
+			);
+			if (!vector) throw new Error("Missing wire fixture");
+			const init = fetchMock.mock.calls[index]?.[1] as RequestInit;
+			const fields = Object.fromEntries(new URLSearchParams(String(init.body)));
+			expect(fields).toEqual({ ...vector.input, sign: vector.signature });
+			expect(Object.values(fields)).not.toContain(signingFixture.token);
+		}
 	});
 
 	it("redacts unexpected provider failures from health details", async () => {

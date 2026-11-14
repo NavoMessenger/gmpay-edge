@@ -117,7 +117,7 @@ describe("receiving method update", () => {
 			db,
 			{
 				...input,
-				configuration: { shopId: "67890", apiKey: "replacement-token" },
+				configuration: { shopId: "67890", apiKey: " replacement-token " },
 			},
 			context,
 		);
@@ -136,9 +136,9 @@ describe("receiving method update", () => {
 					context.integrationConfigSecret,
 				),
 			),
-		).toEqual({ apiKey: "replacement-token" });
+		).toEqual({ apiKey: " replacement-token " });
 		expect(health.mock.contexts[0]).toMatchObject({
-			config: { shopId: "67890", apiKey: "replacement-token" },
+			config: { shopId: "67890", apiKey: " replacement-token " },
 		});
 		const audit = await db
 			.prepare("SELECT before, after FROM audit_logs")

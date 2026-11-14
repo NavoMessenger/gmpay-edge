@@ -5,15 +5,27 @@ describe("receiving provider configuration", () => {
 	it("separates Binance UID from its encrypted credentials", () => {
 		expect(
 			parseReceivingProviderConfiguration("binance", {
-				receiverUid: "34355667",
-				apiKey: "api-key",
-				secretKey: "secret-key",
+				receiverUid: " 34355667 ",
+				apiKey: " api-key ",
+				secretKey: " secret-key ",
 			}),
 		).toEqual({
 			targetType: "account",
 			targetField: "receiverUid",
 			targetValue: "34355667",
 			credentials: { apiKey: "api-key", secretKey: "secret-key" },
+		});
+	});
+
+	it("preserves OKPay token bytes while normalizing its shop identifier", () => {
+		expect(
+			parseReceivingProviderConfiguration("okpay", {
+				shopId: " 10001 ",
+				apiKey: " padded-token ",
+			}),
+		).toMatchObject({
+			targetValue: "10001",
+			credentials: { apiKey: " padded-token " },
 		});
 	});
 

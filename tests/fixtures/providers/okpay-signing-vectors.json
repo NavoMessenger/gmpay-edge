@@ -1,0 +1,222 @@
+{
+	"source": "https://docs.okaypay.me/okpay-sdk.zip",
+	"sdkPath": "sdk/nodejs/okpaySign.js",
+	"sourceSha256": "c2617e487b5fb4c6ac6447a6102726c6ca72ba4c777e5902f5d8a9f11b0aa31f",
+	"token": "TESTtoken123456789abcdefghijABCD",
+	"vectors": [
+		{
+			"name": "official-request",
+			"input": {
+				"id": 10001,
+				"amount": "100.5",
+				"coin": "USDT",
+				"unique_id": "ORDER-20260628-001",
+				"timestamp": 1782680000,
+				"nonce": "a1b2c3d4e5"
+			},
+			"base": "amount=100.5&coin=USDT&id=10001&nonce=a1b2c3d4e5&timestamp=1782680000&unique_id=ORDER-20260628-001",
+			"signature": "7444ADFD8E4F4DA09D752DDF9345E0EE56DC25090FCFAF675DD042830E5E3F79"
+		},
+		{
+			"name": "official-callback",
+			"input": {
+				"status": "success",
+				"code": 200,
+				"data": {
+					"amount": "100.5",
+					"coin": "USDT",
+					"order_id": "abc123def456",
+					"pay_user_id": 123456789,
+					"status": 1,
+					"type": "deposit",
+					"unique_id": "ORDER-20260628-001"
+				},
+				"id": 10001
+			},
+			"base": "code=200&data.amount=100.5&data.coin=USDT&data.order_id=abc123def456&data.pay_user_id=123456789&data.status=1&data.type=deposit&data.unique_id=ORDER-20260628-001&id=10001&status=success",
+			"signature": "64B09C8847849FA6921D8FFBDF8E406D4A8EA623E53970712350F61783403F7D"
+		},
+		{
+			"name": "official-zero-false",
+			"input": {
+				"id": 7,
+				"a": "0",
+				"b": 0,
+				"c": "",
+				"d": null,
+				"e": false,
+				"f": "hello",
+				"nest": {
+					"x": "1",
+					"y": "2"
+				}
+			},
+			"base": "a=0&b=0&e=false&f=hello&id=7&nest.x=1&nest.y=2",
+			"signature": "8BC0AF979075038025DDD51B6F4A2E6CF3FF9B5B5371EB2268D303F89883E92A"
+		},
+		{
+			"name": "ordinary-object",
+			"input": {
+				"id": 10001,
+				"data": {
+					"amount": "1"
+				}
+			},
+			"base": "data.amount=1&id=10001",
+			"signature": "22DFA5B0A5FE03E9E3ED0B0E8FE87FC0E19A2BFE32CE4894C9DC354434A17DC5"
+		},
+		{
+			"name": "nested-sign",
+			"input": {
+				"id": 10001,
+				"data": {
+					"amount": "1",
+					"sign": "signed-business-value"
+				}
+			},
+			"base": "data.amount=1&data.sign=signed-business-value&id=10001",
+			"signature": "DE02082DA256AE802D1C7CFB7A6022E6CD465C3935BEDA4F296530122BC224B4"
+		},
+		{
+			"name": "indexed-arrays",
+			"input": {
+				"id": 10001,
+				"data": [
+					{
+						"amount": "1",
+						"coin": "USDT",
+						"sign": "nested-sign"
+					},
+					0,
+					false,
+					null,
+					"",
+					[
+						{
+							"value": "deep"
+						},
+						true
+					]
+				]
+			},
+			"base": "data.0.amount=1&data.0.coin=USDT&data.0.sign=nested-sign&data.1=0&data.2=false&data.5.0.value=deep&data.5.1=true&id=10001",
+			"signature": "8ACD2CEFDC8996725EB9AB17D58AF1CEB965DE1E26FCA7CBABDB8E6CED414CE1"
+		},
+		{
+			"name": "empty-array",
+			"input": {
+				"id": 10001,
+				"data": []
+			},
+			"base": "id=10001",
+			"signature": "72D920D37C288EF8841D7B3E5CF6EEB9437CC7146AFE298E9A9CE47DA9DCA34A"
+		},
+		{
+			"name": "empty-key-nesting",
+			"input": {
+				"id": 10001,
+				"": {
+					"sign": "nested-sign",
+					"value": "1"
+				}
+			},
+			"base": "id=10001&sign=nested-sign&value=1",
+			"signature": "7322CE0B0E452D5EB94E84E8B82373950692FE1CD2BA1843C88BF5EA8C980008"
+		},
+		{
+			"name": "raw-special-values",
+			"input": {
+				"id": 10001,
+				"name": "空 格+&=%汉字😀",
+				"return_url": "https://merchant.example/a?x=a%20b&y=中 文",
+				"nested": {
+					"sign": "&=%",
+					"empty": "",
+					"none": null,
+					"zero": 0,
+					"disabled": false
+				}
+			},
+			"base": "id=10001&name=空 格+&=%汉字😀&nested.disabled=false&nested.sign=&=%&nested.zero=0&return_url=https://merchant.example/a?x=a%20b&y=中 文",
+			"signature": "43E91B529967F3015F32680940E74A1F5887F388999E2289AB9BD2768693204C"
+		},
+		{
+			"name": "balance-response",
+			"input": {
+				"id": 10001,
+				"status": "success",
+				"code": 200,
+				"data": [
+					{
+						"usdt": "0.00",
+						"trx": "0",
+						"cny": "0"
+					}
+				]
+			},
+			"base": "code=200&data.0.cny=0&data.0.trx=0&data.0.usdt=0.00&id=10001&status=success",
+			"signature": "AA7B143106BFF09EBAE77533F6CCEA0031E1F8DF2477653A3A47A75E9EA96C3D"
+		},
+		{
+			"name": "wire-balance",
+			"input": {
+				"id": "10001",
+				"timestamp": "1782680000",
+				"nonce": "00000000-0000-4000-8000-000000000000"
+			},
+			"base": "id=10001&nonce=00000000-0000-4000-8000-000000000000&timestamp=1782680000",
+			"signature": "71062F9BA33E63B95CFC67DB991849B6F093CC06CEB0D8F754766ACD63ACEABC"
+		},
+		{
+			"name": "wire-paylink",
+			"input": {
+				"id": "10001",
+				"timestamp": "1782680000",
+				"nonce": "00000000-0000-4000-8000-000000000000",
+				"amount": "100.50",
+				"coin": "USDT",
+				"name": "空 格+&=%汉字😀",
+				"callback_url": "https://merchant.example/callback?a=1&b=%20",
+				"return_url": "https://merchant.example/return?a=1&b=中 文",
+				"unique_id": "audit-order"
+			},
+			"base": "amount=100.50&callback_url=https://merchant.example/callback?a=1&b=%20&coin=USDT&id=10001&name=空 格+&=%汉字😀&nonce=00000000-0000-4000-8000-000000000000&return_url=https://merchant.example/return?a=1&b=中 文&timestamp=1782680000&unique_id=audit-order",
+			"signature": "A83E2FEDADAF565953A98D3C9D2F44ED5AF5CB265BCBBDBBEBD3AFFA6432CEF3"
+		}
+	],
+	"collisions": [
+		{
+			"name": "nested-first",
+			"input": {
+				"id": 10001,
+				"data": {
+					"amount": "1"
+				},
+				"data.amount": "2"
+			},
+			"signature": "B05EE21C9C02FD236619893B9AF8EBA6B8DC8C4DF2BC62C014E6DEFA154A17B3"
+		},
+		{
+			"name": "literal-first",
+			"input": {
+				"id": 10001,
+				"data.amount": "2",
+				"data": {
+					"amount": "1"
+				}
+			},
+			"signature": "22DFA5B0A5FE03E9E3ED0B0E8FE87FC0E19A2BFE32CE4894C9DC354434A17DC5"
+		}
+	],
+	"hostedResponse": {
+		"id": 10001,
+		"status": "success",
+		"code": 200,
+		"data": {
+			"order_id": "fixture-order",
+			"pay_url": "https://t.me/okpay?start=fixture",
+			"status": 0
+		},
+		"sign": "58242B8DAEF96B2CF5E446A0CF854585A06E0C377399A460B49DDA8CC6414FF6"
+	}
+}

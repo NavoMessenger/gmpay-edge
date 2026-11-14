@@ -148,7 +148,7 @@ const createReceivingMethodInput = z.object({
 		.min(1)
 		.max(100)
 		.transform((values) => [...new Set(values)]),
-	configuration: z.record(z.string(), z.string().trim().max(512)),
+	configuration: z.record(z.string(), z.string().max(512)),
 	minAmount: z
 		.string()
 		.trim()
@@ -300,7 +300,7 @@ const updateReceivingMethodInput = createReceivingMethodInput
 					.trim()
 					.regex(/^[1-9]\d*$/)
 					.max(100),
-				apiKey: z.string().trim().max(512).optional(),
+				apiKey: z.string().max(512).optional(),
 			})
 			.optional(),
 	});
